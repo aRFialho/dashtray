@@ -77,7 +77,7 @@ export function OrdersChart({
               fill="url(#dailyOrdersFill)"
               radius={[8, 8, 2, 2]}
               maxBarSize={42}
-              animationDuration={900}
+              isAnimationActive={false}
             />
           </BarChart>
         </ResponsiveContainer>

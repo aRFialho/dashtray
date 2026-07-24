@@ -14,10 +14,8 @@ services:
         value: production
       - key: APP_TIMEZONE
         value: America/Sao_Paulo
-      - key: SYNC_CRON
-        value: "*/3 * * * *"
       - key: STATUS
-        value: "*"
+        sync: false
       - key: DATABASE_URL
         sync: false
       - key: DIRECT_URL

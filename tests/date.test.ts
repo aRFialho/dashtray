@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  automaticSyncPhase,
   daysInMonth,
+  isAutomaticSyncWindow,
   liveMonthRangeUtc,
   monthRangeUtc,
   parseMonthKey,
   parseTrayDate,
+  todayRangeUtc,
   trayLiveMonthRange,
-  trayMonthRange
+  trayMonthRange,
+  trayTodayRange
 } from "../server/utils/date";
 
 describe("month helpers", () => {
@@ -50,4 +54,25 @@ describe("month helpers", () => {
     expect(parseTrayDate("2026-07-24", "08:30:00", "America/Sao_Paulo").toISOString())
       .toBe("2026-07-24T11:30:00.000Z");
   });
+
+  it("gera o intervalo rápido somente para o dia atual", () => {
+    const now = new Date("2026-07-24T13:00:00.000Z");
+    expect(trayTodayRange("America/Sao_Paulo", now)).toEqual({
+      startDate: "2026-07-24",
+      endDate: "2026-07-24 23:59:59"
+    });
+    const range = todayRangeUtc("America/Sao_Paulo", now);
+    expect(range.start.toISOString()).toBe("2026-07-24T03:00:00.000Z");
+    expect(range.end.toISOString()).toBe("2026-07-25T03:00:00.000Z");
+  });
+
+  it("limita a agenda automática ao expediente de segunda a sexta", () => {
+    expect(automaticSyncPhase("America/Sao_Paulo", new Date("2026-07-24T10:42:00.000Z"))).toBe("opening");
+    expect(automaticSyncPhase("America/Sao_Paulo", new Date("2026-07-24T10:45:00.000Z"))).toBe("intraday");
+    expect(automaticSyncPhase("America/Sao_Paulo", new Date("2026-07-24T21:00:00.000Z"))).toBe("closing");
+    expect(automaticSyncPhase("America/Sao_Paulo", new Date("2026-07-25T13:00:00.000Z"))).toBe("closed");
+    expect(isAutomaticSyncWindow("America/Sao_Paulo", new Date("2026-07-24T13:00:00.000Z"))).toBe(true);
+    expect(isAutomaticSyncWindow("America/Sao_Paulo", new Date("2026-07-24T21:01:00.000Z"))).toBe(false);
+  });
+
 });

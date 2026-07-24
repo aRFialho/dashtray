@@ -33,6 +33,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ month })
     }),
+  liveSync: (month: string, automatic = false) =>
+    request<{ skipped: boolean; reason?: string; update?: import("./types").LiveCountUpdate }>("/api/sync/live", {
+      method: "POST",
+      body: JSON.stringify({ month, automatic })
+    }),
   trayStatus: () => request<import("./types").TrayStatus>("/api/tray/status"),
   connectTray: (input: { apiAddress: string; code: string; storeHost?: string }) =>
     request<{ dashboard: import("./types").DashboardData }>("/api/tray/connect", {

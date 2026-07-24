@@ -2,18 +2,21 @@ import type { TrayStore } from "@prisma/client";
 import { env } from "../config/env";
 import { prisma } from "../db";
 import {
+  currentDay,
   currentMonth,
   liveMonthRangeUtc,
   monthRangeUtc,
   parseMonthKey,
   parseTrayDate,
   parseTrayDateTime,
+  todayRangeUtc,
   trayLiveMonthRange,
-  trayMonthRange
+  trayMonthRange,
+  trayTodayRange
 } from "../utils/date";
 import { buildDashboardData } from "./dashboard";
 import { evaluateGoalAchievements } from "./goal-progress";
-import { emitDashboardUpdate, emitGoalAchieved, emitNewOrder } from "./realtime";
+import { emitDashboardUpdate, emitGoalAchieved, emitLiveCountUpdate, emitNewOrder } from "./realtime";
 import { trayRequest } from "./tray-client";
 
 export type TrayOrder = {
@@ -47,9 +50,53 @@ type TrayOrderResponse = {
   Order?: TrayOrder;
 };
 
+export type LiveCountUpdatePayload = {
+  month: string;
+  orders: number;
+  previousOrders: number;
+  delta: number;
+  day: number;
+  dailyOrders: number;
+  syncedAt: string;
+  source: "scheduler" | "browser" | "manual" | "webhook" | "initial";
+};
+
+export type SyncScope = "month" | "today";
+
+export type SyncMonthOptions = {
+  broadcast?: "full" | "count-only" | "none";
+  source?: LiveCountUpdatePayload["source"];
+  scope?: SyncScope;
+  reason?: "opening" | "intraday" | "closing" | "startup" | "manual" | "browser";
+};
+
 const MAX_MONTH_PAGES = 500;
 const UPSERT_CONCURRENCY = 10;
 const MAX_WEBHOOK_ATTEMPTS = 8;
+
+
+function buildLiveCountUpdate(
+  dashboard: {
+    month: string;
+    summary: { orders: number };
+    chart: Array<{ day: number; dailyOrders: number | null }>;
+  },
+  previousOrders: number,
+  source: LiveCountUpdatePayload["source"]
+): LiveCountUpdatePayload {
+  const day = currentDay(env.APP_TIMEZONE);
+  const today = dashboard.chart.find((point) => point.day === day);
+  return {
+    month: dashboard.month,
+    orders: dashboard.summary.orders,
+    previousOrders,
+    delta: dashboard.summary.orders - previousOrders,
+    day,
+    dailyOrders: today?.dailyOrders ?? 0,
+    syncedAt: new Date().toISOString(),
+    source
+  };
+}
 
 function normalizeStatus(order: TrayOrder): string {
   return String(order.status || order.OrderStatus?.status || "SEM STATUS").trim().toUpperCase();
@@ -124,6 +171,8 @@ export async function upsertTrayOrder(store: TrayStore, order: TrayOrder, detect
 }
 
 async function removeOrderAndRefresh(store: TrayStore, orderId: string, reason: string) {
+  const month = currentMonth(env.APP_TIMEZONE);
+  const before = await buildDashboardData(month, store.id);
   const removed = await prisma.order.deleteMany({
     where: { storeRecordId: store.id, trayOrderId: orderId }
   });
@@ -131,8 +180,9 @@ async function removeOrderAndRefresh(store: TrayStore, orderId: string, reason: 
   await prisma.trayStore.update({ where: { id: store.id }, data: { lastSyncAt: new Date() } });
 
   if (removed.count > 0) {
-    const dashboard = await buildDashboardData(currentMonth(env.APP_TIMEZONE), store.id);
+    const dashboard = await buildDashboardData(month, store.id);
     emitDashboardUpdate(dashboard);
+    emitLiveCountUpdate(buildLiveCountUpdate(dashboard, before.summary.orders, "webhook"));
   }
 
   return { ignored: true, removed: removed.count, reason };
@@ -162,16 +212,18 @@ export async function syncOrderById(store: TrayStore, orderId: string, rawAction
     return removeOrderAndRefresh(store, orderId, "Pedido fora do período ao vivo do mês atual.");
   }
 
+  const month = currentMonth(env.APP_TIMEZONE);
+  const before = await buildDashboardData(month, store.id);
   const result = await upsertTrayOrder(store, response.Order, true);
   await prisma.trayStore.update({ where: { id: store.id }, data: { lastSyncAt: new Date() } });
 
-  const month = currentMonth(env.APP_TIMEZONE);
   const beforeAchievements = await buildDashboardData(month, store.id);
   const achievements = await evaluateGoalAchievements(store.id, month, beforeAchievements.summary.orders);
   const dashboard = achievements.length > 0
     ? await buildDashboardData(month, store.id)
     : beforeAchievements;
   emitDashboardUpdate(dashboard);
+  emitLiveCountUpdate(buildLiveCountUpdate(dashboard, before.summary.orders, "webhook"));
   achievements.forEach(emitGoalAchieved);
 
   if (result.isNew) {
@@ -186,22 +238,43 @@ export async function syncOrderById(store: TrayStore, orderId: string, rawAction
   return result;
 }
 
-export async function syncMonth(store: TrayStore, month = currentMonth(env.APP_TIMEZONE)) {
+async function performSyncMonth(
+  store: TrayStore,
+  month = currentMonth(env.APP_TIMEZONE),
+  options: SyncMonthOptions = {}
+) {
   const parts = parseMonthKey(month);
   const isCurrent = month === currentMonth(env.APP_TIMEZONE);
-  const apiRange = isCurrent
-    ? trayLiveMonthRange(env.APP_TIMEZONE)
-    : (() => {
-        const range = trayMonthRange(parts);
-        return { ...range, endDate: `${range.endDate} 23:59:59` };
-      })();
+  const scope = options.scope ?? "month";
+  if (scope === "today" && !isCurrent) {
+    throw new Error("A sincronização rápida está disponível apenas para o mês atual.");
+  }
+
+  const apiRange = scope === "today"
+    ? trayTodayRange(env.APP_TIMEZONE)
+    : isCurrent
+      ? trayLiveMonthRange(env.APP_TIMEZONE)
+      : (() => {
+          const range = trayMonthRange(parts);
+          return { ...range, endDate: `${range.endDate} 23:59:59` };
+        })();
   const fullMonthRange = monthRangeUtc(parts, env.APP_TIMEZONE);
-  const databaseRange = isCurrent
-    ? liveMonthRangeUtc(env.APP_TIMEZONE)
-    : { ...fullMonthRange, monthEnd: fullMonthRange.end };
+  const databaseRange = scope === "today"
+    ? { ...todayRangeUtc(env.APP_TIMEZONE), monthEnd: fullMonthRange.end }
+    : isCurrent
+      ? liveMonthRangeUtc(env.APP_TIMEZONE)
+      : { ...fullMonthRange, monthEnd: fullMonthRange.end };
+  const source = options.source ?? "manual";
+  const broadcast = options.broadcast ?? "full";
+  const beforeDashboard = await buildDashboardData(month, store.id);
   const syncStartedAt = new Date();
+  const reason = options.reason ?? (scope === "today" ? "browser" : "manual");
   const log = await prisma.syncLog.create({
-    data: { storeRecordId: store.id, kind: `month:${month}:status:${env.trackedStatus}`, status: "running" }
+    data: {
+      storeRecordId: store.id,
+      kind: `${scope}:${month}:reason:${reason}:status:${env.trackedStatus}`,
+      status: "running"
+    }
   });
 
   let pages = 0;
@@ -282,7 +355,7 @@ export async function syncMonth(store: TrayStore, month = currentMonth(env.APP_T
           status: "success",
           items,
           pages,
-          message: `Status monitorados: ${env.trackedStatus}; período ${apiRange.startDate} até ${apiRange.endDate}.`,
+          message: `${scope === "today" ? "Sincronização rápida do dia" : "Reconciliação mensal"}; status monitorados: ${env.trackedStatus}; período ${apiRange.startDate} até ${apiRange.endDate}.`,
           finishedAt: new Date()
         }
       })
@@ -293,14 +366,18 @@ export async function syncMonth(store: TrayStore, month = currentMonth(env.APP_T
     const dashboard = achievements.length > 0
       ? await buildDashboardData(month, store.id)
       : beforeAchievements;
-    emitDashboardUpdate(dashboard);
+    const liveUpdate = buildLiveCountUpdate(dashboard, beforeDashboard.summary.orders, source);
+    if (broadcast === "full") emitDashboardUpdate(dashboard);
+    if (broadcast === "count-only") emitLiveCountUpdate(liveUpdate);
     achievements.forEach(emitGoalAchieved);
     return {
       items,
       pages,
       statuses: env.trackAllStatuses ? ["*"] : env.trackedStatuses,
+      scope,
       period: apiRange,
-      dashboard
+      dashboard,
+      liveUpdate
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Erro desconhecido";
@@ -310,6 +387,52 @@ export async function syncMonth(store: TrayStore, month = currentMonth(env.APP_T
     });
     throw error;
   }
+}
+
+type ActiveSync = {
+  scope: SyncScope;
+  task: ReturnType<typeof performSyncMonth>;
+};
+
+const activeMonthSyncs = new Map<string, ActiveSync>();
+
+export function syncMonth(
+  store: TrayStore,
+  month = currentMonth(env.APP_TIMEZONE),
+  options: SyncMonthOptions = {}
+): ReturnType<typeof performSyncMonth> {
+  const requestedScope = options.scope ?? "month";
+  const key = `${store.id}:${month}`;
+  const existing = activeMonthSyncs.get(key);
+
+  if (existing) {
+    // Uma reconciliação mensal também cobre a consulta rápida de hoje.
+    if (existing.scope === "month" || requestedScope === "today") return existing.task;
+
+    // A reconciliação mensal não pode ser engolida por uma consulta rápida em andamento.
+    const queued = existing.task
+      .catch(() => undefined)
+      .then(() => performSyncMonth(store, month, { ...options, scope: "month" })) as ReturnType<typeof performSyncMonth>;
+    activeMonthSyncs.set(key, { scope: "month", task: queued });
+    void queued.finally(() => {
+      if (activeMonthSyncs.get(key)?.task === queued) activeMonthSyncs.delete(key);
+    }).catch(() => undefined);
+    return queued;
+  }
+
+  const task = performSyncMonth(store, month, { ...options, scope: requestedScope });
+  activeMonthSyncs.set(key, { scope: requestedScope, task });
+  void task.finally(() => {
+    if (activeMonthSyncs.get(key)?.task === task) activeMonthSyncs.delete(key);
+  }).catch(() => undefined);
+  return task;
+}
+
+export function syncToday(
+  store: TrayStore,
+  options: Omit<SyncMonthOptions, "scope"> = {}
+): ReturnType<typeof performSyncMonth> {
+  return syncMonth(store, currentMonth(env.APP_TIMEZONE), { ...options, scope: "today" });
 }
 
 function retryDelayMs(attempt: number): number {

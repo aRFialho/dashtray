@@ -14,7 +14,7 @@ import { RecentOrders } from "./components/RecentOrders";
 import { Sidebar, type ViewName } from "./components/Sidebar";
 import { TrayIntegration } from "./components/TrayIntegration";
 import { useClock } from "./hooks/useClock";
-import type { DashboardData, GoalAchievementEvent, GoalLevelInput, LiveIncrementEvent, NewOrderEvent } from "./types";
+import type { DashboardData, GoalAchievementEvent, GoalLevelInput, LiveCountUpdate, LiveIncrementEvent, NewOrderEvent } from "./types";
 
 
 function formatRemainingTime(monthEndsAt: string, now: Date): string {
@@ -45,6 +45,22 @@ function browserMonth(): string {
   return `${parts.find((part) => part.type === "year")?.value}-${parts.find((part) => part.type === "month")?.value}`;
 }
 
+function isAutomaticSyncTime(now = new Date()): boolean {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Sao_Paulo",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(now);
+  const weekday = parts.find((part) => part.type === "weekday")?.value;
+  if (weekday === "Sat" || weekday === "Sun") return false;
+  const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
+  const totalMinutes = hour * 60 + minute;
+  return totalMinutes >= 7 * 60 + 42 && totalMinutes < 18 * 60;
+}
+
 export default function App() {
   const [auth, setAuth] = useState<{ loading: boolean; email: string | null }>({ loading: true, email: null });
   const [month, setMonth] = useState(browserMonth());
@@ -61,11 +77,31 @@ export default function App() {
   const dashboardRef = useRef<DashboardData | null>(null);
   const liveModeRef = useRef(false);
   const incrementTimerRef = useRef<number | null>(null);
+  const autoSyncRunningRef = useRef(false);
   const clock = useClock(60_000);
 
   useEffect(() => {
     liveModeRef.current = liveMode;
   }, [liveMode]);
+
+  const animateOrderIncrement = useCallback((amount: number, day: number) => {
+    if (!liveModeRef.current || amount <= 0) return;
+    const now = Date.now();
+
+    setLiveIncrement((current) => ({
+      id: now,
+      amount: current && now - current.createdAt < 900 ? current.amount + amount : amount,
+      day,
+      createdAt: now
+    }));
+    setPulseKey((key) => key + 1);
+
+    if (incrementTimerRef.current !== null) window.clearTimeout(incrementTimerRef.current);
+    incrementTimerRef.current = window.setTimeout(() => {
+      setLiveIncrement(null);
+      incrementTimerRef.current = null;
+    }, 2_600);
+  }, []);
 
   const applyDashboard = useCallback((data: DashboardData, animateIncrement = true) => {
     const previous = dashboardRef.current;
@@ -73,28 +109,36 @@ export default function App() {
       ? data.summary.orders - previous.summary.orders
       : 0;
 
-    if (animateIncrement && liveModeRef.current && delta > 0) {
+    if (animateIncrement && delta > 0) {
       const currentPoint = [...data.chart].reverse().find((point) => point.dailyOrders !== null);
-      const now = Date.now();
-
-      setLiveIncrement((current) => ({
-        id: now,
-        amount: current && now - current.createdAt < 900 ? current.amount + delta : delta,
-        day: currentPoint?.day ?? new Date().getDate(),
-        createdAt: now
-      }));
-      setPulseKey((key) => key + 1);
-
-      if (incrementTimerRef.current !== null) window.clearTimeout(incrementTimerRef.current);
-      incrementTimerRef.current = window.setTimeout(() => {
-        setLiveIncrement(null);
-        incrementTimerRef.current = null;
-      }, 2_600);
+      animateOrderIncrement(delta, currentPoint?.day ?? new Date().getDate());
     }
 
     dashboardRef.current = data;
     setDashboard(data);
-  }, []);
+  }, [animateOrderIncrement]);
+
+  const applyLiveCount = useCallback((update: LiveCountUpdate) => {
+    const current = dashboardRef.current;
+    if (!current || current.month !== update.month) return;
+
+    const actualDelta = update.orders - current.summary.orders;
+    const next: DashboardData = {
+      ...current,
+      store: current.store ? { ...current.store, lastSyncAt: update.syncedAt } : null,
+      summary: {
+        ...current.summary,
+        orders: update.orders
+      },
+      chart: current.chart.map((point) => point.day === update.day
+        ? { ...point, orders: update.orders, dailyOrders: update.dailyOrders }
+        : point)
+    };
+
+    dashboardRef.current = next;
+    setDashboard(next);
+    if (actualDelta > 0) animateOrderIncrement(actualDelta, update.day);
+  }, [animateOrderIncrement]);
 
   useEffect(() => () => {
     if (incrementTimerRef.current !== null) window.clearTimeout(incrementTimerRef.current);
@@ -120,10 +164,22 @@ export default function App() {
     if (!auth.email) return;
     const socket = io({ transports: ["websocket", "polling"] });
     socket.on("connect", () => {
-      loadDashboard(month).catch(() => undefined);
+      if (liveModeRef.current) {
+        if (isAutomaticSyncTime()) {
+          api.liveSync(month, true)
+            .then(({ update }) => update && applyLiveCount(update))
+            .catch(() => undefined);
+        }
+      } else {
+        loadDashboard(month).catch(() => undefined);
+      }
     });
     socket.on("dashboard:update", (data: DashboardData) => {
-      if (data.month === month) applyDashboard(data);
+      if (data.month !== month || liveModeRef.current) return;
+      applyDashboard(data, false);
+    });
+    socket.on("orders:count-update", (update: LiveCountUpdate) => {
+      if (update.month === month) applyLiveCount(update);
     });
     socket.on("order:new", (order: NewOrderEvent) => {
       setLastOrder(order);
@@ -138,21 +194,38 @@ export default function App() {
     return () => {
       socket.disconnect();
     };
-  }, [applyDashboard, auth.email, loadDashboard, month]);
+  }, [applyDashboard, applyLiveCount, auth.email, loadDashboard, month]);
 
   useEffect(() => {
     if (!auth.email) return;
-    const refresh = () => loadDashboard(month).catch(() => undefined);
-    const interval = window.setInterval(refresh, 180_000);
+
+    const pulse = async () => {
+      if (month !== browserMonth() || !isAutomaticSyncTime() || autoSyncRunningRef.current) return;
+      const lastSyncAt = dashboardRef.current?.store?.lastSyncAt;
+      if (lastSyncAt && Date.now() - new Date(lastSyncAt).getTime() < 4 * 60_000) return;
+      autoSyncRunningRef.current = true;
+      try {
+        const result = await api.liveSync(month, true);
+        if (result.update) applyLiveCount(result.update);
+      } catch (error) {
+        console.error("Falha na atualização automática de pedidos:", error);
+      } finally {
+        autoSyncRunningRef.current = false;
+      }
+    };
+
+    const initialPulse = window.setTimeout(() => void pulse(), 5_000);
+    const interval = window.setInterval(() => void pulse(), 180_000);
     const handleVisibility = () => {
-      if (document.visibilityState === "visible") refresh();
+      if (document.visibilityState === "visible") void pulse();
     };
     document.addEventListener("visibilitychange", handleVisibility);
     return () => {
+      window.clearTimeout(initialPulse);
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [auth.email, loadDashboard, month]);
+  }, [applyLiveCount, auth.email, month]);
 
   useEffect(() => {
     if (!notice) return;
@@ -192,9 +265,15 @@ export default function App() {
     setSyncing(true);
     setNotice("");
     try {
-      const result = await api.sync(month);
-      applyDashboard(result.dashboard);
-      setNotice("Sincronização concluída.");
+      if (liveModeRef.current) {
+        const result = await api.liveSync(month, false);
+        if (result.update) applyLiveCount(result.update);
+        setNotice("Pedidos de hoje atualizados.");
+      } else {
+        const result = await api.sync(month);
+        applyDashboard(result.dashboard, false);
+        setNotice("Sincronização concluída.");
+      }
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Falha na sincronização.");
     } finally {

@@ -107,7 +107,7 @@ export function LiveMode(props: {
   const encouragement = liveEncouragement(props.data);
 
   return (
-    <section className={`live-mode ${props.pulseKey ? "live-mode--pulse" : ""}`} key={`live-${props.pulseKey}`}>
+    <section className={`live-mode ${props.increment ? "live-mode--pulse" : ""}`}>
       <div className="live-grid" />
       <div className="live-glow live-glow--one" />
       <div className="live-glow live-glow--two" />
@@ -222,7 +222,7 @@ export function LiveMode(props: {
       </main>
 
       {props.notice && <div className="live-toast">{props.notice}</div>}
-      {props.pulseKey > 0 && <div className="order-wave" />}
+      {props.increment && <div key={`wave-${props.pulseKey}`} className="order-wave" />}
     </section>
   );
 }

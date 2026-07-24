@@ -34,6 +34,10 @@ export function emitDashboardUpdate(payload: unknown): void {
   io?.to("admins").emit("dashboard:update", payload);
 }
 
+export function emitLiveCountUpdate(payload: unknown): void {
+  io?.to("admins").emit("orders:count-update", payload);
+}
+
 export function emitNewOrder(payload: unknown): void {
   io?.to("admins").emit("order:new", payload);
 }

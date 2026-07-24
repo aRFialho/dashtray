@@ -1,8 +1,8 @@
 # Volt Tray Dashboard
 
-## Modo todos os pedidos do mês
+## Status que entram no contador
 
-Para contar todos os pedidos, independentemente do status, use `STATUS=*`. A sincronização consulta o período do primeiro dia do mês atual até o fim do dia atual. O webhook aceita qualquer status e mantém o pedido atualizado.
+Configure uma lista explícita, por exemplo `STATUS=A ENVIAR,ENVIADO,FINALIZADO`. Pedidos cancelados ou movidos para qualquer status fora da lista são removidos na consulta rápida do próprio dia e nas reconciliações mensais das 07:42 e 18:00. Use `STATUS=*` somente quando todos os status, inclusive cancelados, devam ser contados.
 
 No Render, configure `APP_URL=https://dashtray.onrender.com`. Se o log informar autorização expirada ou revogada, abra a aba **Integração Tray** e autorize novamente a loja, pois tokens inválidos não podem ser recuperados pelo código.
 
@@ -14,7 +14,7 @@ Painel dark, moderno e responsivo para acompanhar pedidos mensais da Tray, metas
 - Autorização oficial da Tray com `consumer_key`, `consumer_secret`, `code` e `api_address`.
 - Renovação automática de `access_token` usando `refresh_token`.
 - Tokens criptografados no Neon com AES-256-GCM.
-- Carga do primeiro dia do mês atual até o dia atual via `GET /orders`, paginação de 50 registros e filtro por `STATUS`.
+- Consulta rápida dos pedidos de hoje e reconciliação mensal completa via `GET /orders`, paginação de 50 registros e filtro por `STATUS`.
 - Webhook `order_insert`, `order_update` e `order_delete`, com console administrativo de eventos, erros e retentativas.
 - Deduplicação de notificações idênticas em janelas de 30 segundos.
 - Retentativa persistente de webhooks com backoff exponencial e recuperação após reinício.
@@ -70,10 +70,10 @@ Preencha no `.env`:
 ```env
 TRAY_CONSUMER_KEY=...
 TRAY_CONSUMER_SECRET=...
-STATUS=A ENVIAR
+STATUS=A ENVIAR,ENVIADO,FINALIZADO
 ```
 
-`STATUS` deve ser exatamente o nome do status da Tray que entrará no contador. A listagem mensal e cada pedido consultado após o webhook passam por esse mesmo filtro.
+Separe vários status por vírgula. A consulta rápida, a reconciliação mensal e cada pedido consultado após o webhook passam pelo mesmo filtro.
 
 O código de autorização de 64 caracteres não deve entrar no Git. Há três maneiras de concluir a conexão:
 
@@ -132,17 +132,14 @@ Assim, cada deploy aplica as migrations pendentes antes de iniciar o servidor.
 
 ## 6. Sincronização
 
-O projeto combina três camadas:
+O projeto combina quatro camadas:
 
-- **Carga mensal inicial:** busca todas as páginas do primeiro dia do mês atual até o dia de hoje, usando o `STATUS` configurado.
-- **Webhook:** ao receber o ID de um pedido, consulta o registro completo e só mantém no contador se a data estiver no mês atual e o status for igual a `STATUS`.
-- **Reconciliação automática:** o cron repete a sincronização do período ao vivo a cada 3 minutos por padrão e remove registros que deixaram o status monitorado.
+- **Primeira sincronização do dia, 07:42:** reconcilia o mês atual inteiro e remove pedidos que deixaram os status monitorados.
+- **Sincronização rápida:** de segunda a sexta, das 07:45 às 17:57, consulta somente os pedidos criados hoje a cada 3 minutos.
+- **Última sincronização do dia, 18:00:** reconcilia novamente o mês inteiro para capturar cancelamentos e mudanças de status em pedidos de dias anteriores.
+- **Webhook:** ao receber o ID de um pedido, consulta o registro completo e mantém ou remove o pedido imediatamente conforme data e status.
 
-Altere o cron com:
-
-```env
-SYNC_CRON=*/3 * * * *
-```
+A agenda é fixa no fuso `America/Sao_Paulo`; não é necessário configurar `SYNC_CRON`. Se o serviço iniciar durante o expediente sem ter feito a reconciliação mensal daquele dia, ele executa a reconciliação antes da consulta rápida.
 
 Em planos gratuitos, o Render pode suspender a instância sem tráfego. O webhook reativa o serviço, mas uma instância sempre ativa oferece comportamento mais consistente para a reconciliação periódica.
 
@@ -174,7 +171,7 @@ npm run demo:seed
 - Neon connection pooling: https://neon.com/docs/connect/connection-pooling
 - Prisma migrate deploy: https://www.prisma.io/docs/cli/migrate/deploy
 
-## Níveis de meta e atualização a cada 3 minutos
+## Níveis de meta e sincronização otimizada
 
 A versão atual permite configurar até 8 níveis mensais de meta. Os níveis devem ser crescentes, por exemplo:
 
@@ -190,11 +187,7 @@ A nova migration é aplicada automaticamente no Render pelo comando `prisma migr
 prisma/migrations/202607240002_goal_levels/migration.sql
 ```
 
-Para sincronizar os pedidos a cada 3 minutos, configure no ambiente local e no Render:
-
-```env
-SYNC_CRON=*/3 * * * *
-```
+Durante o expediente, a atualização rápida consulta apenas os pedidos de hoje a cada 3 minutos. As reconciliações completas do mês acontecem às 07:42 e 18:00, de segunda a sexta.
 
 A tela cheia mostra somente a tag animada `AO VIVO`. O gráfico desse modo exibe a quantidade de pedidos de cada dia; o dashboard administrativo mantém o gráfico acumulado versus ritmo da meta.
 

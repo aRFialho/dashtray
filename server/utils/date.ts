@@ -136,6 +136,65 @@ export function trayMonthRange({ year, month }: MonthParts): { startDate: string
 }
 
 
+
+export function todayRangeUtc(
+  timeZone = process.env.APP_TIMEZONE || DEFAULT_TIMEZONE,
+  now = new Date()
+): { start: Date; end: Date } {
+  const today = currentDateParts(timeZone, now);
+  const totalDays = daysInMonth(today);
+  const nextDay = today.day < totalDays
+    ? { year: today.year, month: today.month, day: today.day + 1 }
+    : today.month === 12
+      ? { year: today.year + 1, month: 1, day: 1 }
+      : { year: today.year, month: today.month + 1, day: 1 };
+
+  return {
+    start: zonedDateTimeToUtc({ ...today, hour: 0, minute: 0, second: 0 }, timeZone),
+    end: zonedDateTimeToUtc({ ...nextDay, hour: 0, minute: 0, second: 0 }, timeZone)
+  };
+}
+
+export function trayTodayRange(
+  timeZone = process.env.APP_TIMEZONE || DEFAULT_TIMEZONE,
+  now = new Date()
+): { startDate: string; endDate: string } {
+  const today = currentDateParts(timeZone, now);
+  const date = `${today.year}-${String(today.month).padStart(2, "0")}-${String(today.day).padStart(2, "0")}`;
+  return { startDate: date, endDate: `${date} 23:59:59` };
+}
+
+export type AutomaticSyncPhase = "closed" | "opening" | "intraday" | "closing";
+
+export function automaticSyncPhase(
+  timeZone = process.env.APP_TIMEZONE || DEFAULT_TIMEZONE,
+  now = new Date()
+): AutomaticSyncPhase {
+  const weekday = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short" }).format(now);
+  if (weekday === "Sat" || weekday === "Sun") return "closed";
+
+  const parts = numericParts(now, timeZone);
+  const minutes = (parts.hour ?? 0) * 60 + (parts.minute ?? 0);
+  const opening = 7 * 60 + 42;
+  const closing = 18 * 60;
+
+  if (minutes === opening) return "opening";
+  if (minutes === closing) return "closing";
+  if (minutes > opening && minutes < closing && (minutes - opening) % 3 === 0) return "intraday";
+  return "closed";
+}
+
+export function isAutomaticSyncWindow(
+  timeZone = process.env.APP_TIMEZONE || DEFAULT_TIMEZONE,
+  now = new Date()
+): boolean {
+  const weekday = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short" }).format(now);
+  if (weekday === "Sat" || weekday === "Sun") return false;
+  const parts = numericParts(now, timeZone);
+  const minutes = (parts.hour ?? 0) * 60 + (parts.minute ?? 0);
+  return minutes >= 7 * 60 + 42 && minutes < 18 * 60;
+}
+
 export function liveMonthRangeUtc(
   timeZone = process.env.APP_TIMEZONE || DEFAULT_TIMEZONE,
   now = new Date()

@@ -104,6 +104,17 @@ export type LiveIncrementEvent = {
   createdAt: number;
 };
 
+export type LiveCountUpdate = {
+  month: string;
+  orders: number;
+  previousOrders: number;
+  delta: number;
+  day: number;
+  dailyOrders: number;
+  syncedAt: string;
+  source: "scheduler" | "browser" | "manual" | "webhook" | "initial";
+};
+
 export type GoalAchievementEvent = {
   id: string;
   month: string;
