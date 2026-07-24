@@ -25,6 +25,8 @@ model TrayStore {
   updatedAt             DateTime       @updatedAt @map("updated_at")
   orders                Order[]
   goals                 Goal[]
+  goalLevels            GoalLevel[]
+  goalAchievements      GoalAchievement[]
   webhookEvents         WebhookEvent[]
   syncLogs              SyncLog[]
 
@@ -69,6 +71,40 @@ model Goal {
   @@unique([storeRecordId, year, month])
   @@index([storeRecordId, year, month])
   @@map("goals")
+}
+
+
+model GoalLevel {
+  id            String           @id @default(cuid())
+  storeRecordId String           @map("store_record_id")
+  year          Int
+  month         Int
+  position      Int
+  label         String
+  targetOrders  Int              @map("target_orders")
+  createdBy     String?          @map("created_by")
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+  store         TrayStore        @relation(fields: [storeRecordId], references: [id], onDelete: Cascade)
+  achievement   GoalAchievement?
+
+  @@unique([storeRecordId, year, month, position])
+  @@unique([storeRecordId, year, month, targetOrders])
+  @@index([storeRecordId, year, month, position])
+  @@map("goal_levels")
+}
+
+model GoalAchievement {
+  id            String    @id @default(cuid())
+  goalLevelId   String    @unique @map("goal_level_id")
+  storeRecordId String    @map("store_record_id")
+  orderCount    Int       @map("order_count")
+  achievedAt    DateTime  @default(now()) @map("achieved_at")
+  goalLevel     GoalLevel @relation(fields: [goalLevelId], references: [id], onDelete: Cascade)
+  store         TrayStore @relation(fields: [storeRecordId], references: [id], onDelete: Cascade)
+
+  @@index([storeRecordId, achievedAt])
+  @@map("goal_achievements")
 }
 
 model WebhookEvent {

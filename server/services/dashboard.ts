@@ -10,12 +10,25 @@ import {
   monthRangeUtc,
   parseMonthKey
 } from "../utils/date";
+import { ensureGoalLevels } from "./goal-progress";
 
 export async function getDefaultStore() {
   return prisma.trayStore.findFirst({
     where: { active: true },
     orderBy: { installedAt: "asc" }
   });
+}
+
+function emptyGoals() {
+  return {
+    levels: [],
+    activeLevel: null,
+    nextLevel: null,
+    completedCount: 0,
+    totalCount: 0,
+    allCompleted: false,
+    stageProgress: 0
+  };
 }
 
 export async function buildDashboardData(month = currentMonth(env.APP_TIMEZONE), storeRecordId?: string) {
@@ -35,6 +48,7 @@ export async function buildDashboardData(month = currentMonth(env.APP_TIMEZONE),
   const emptySummary = {
     orders: 0,
     goal: 0,
+    goalLabel: "Nenhuma meta",
     progress: 0,
     remaining: 0,
     dailyAverage: 0,
@@ -56,6 +70,7 @@ export async function buildDashboardData(month = currentMonth(env.APP_TIMEZONE),
       },
       store: null,
       summary: emptySummary,
+      goals: emptyGoals(),
       chart: [],
       recentOrders: [],
       sync: null
@@ -70,21 +85,13 @@ export async function buildDashboardData(month = currentMonth(env.APP_TIMEZONE),
       : { status: { in: env.trackedStatuses, mode: "insensitive" as const } })
   };
 
-  const [orders, goal, recentOrders, lastSync] = await Promise.all([
+  const [orders, goalLevels, recentOrders, lastSync] = await Promise.all([
     prisma.order.findMany({
       where,
       select: { orderDate: true },
       orderBy: { orderDate: "asc" }
     }),
-    prisma.goal.findUnique({
-      where: {
-        storeRecordId_year_month: {
-          storeRecordId: store.id,
-          year: parts.year,
-          month: parts.month
-        }
-      }
-    }),
+    ensureGoalLevels(store.id, month),
     prisma.order.findMany({
       where,
       orderBy: [{ modifiedAt: "desc" }, { orderDate: "desc" }, { trayOrderId: "desc" }],
@@ -112,9 +119,24 @@ export async function buildDashboardData(month = currentMonth(env.APP_TIMEZONE),
     if (day >= 1 && day <= totalDays) counts[day - 1] = (counts[day - 1] ?? 0) + 1;
   });
 
+  const levelViews = goalLevels.map((level) => ({
+    id: level.id,
+    position: level.position,
+    label: level.label,
+    targetOrders: level.targetOrders,
+    achieved: Boolean(level.achievement),
+    achievedAt: level.achievement?.achievedAt ?? null
+  }));
+  const completedCount = levelViews.filter((level) => level.achieved).length;
+  const allCompleted = levelViews.length > 0 && completedCount === levelViews.length;
+  const activeLevel = levelViews.find((level) => !level.achieved) ?? levelViews.at(-1) ?? null;
+  const activeIndex = activeLevel ? levelViews.findIndex((level) => level.id === activeLevel.id) : -1;
+  const nextLevel = activeIndex >= 0 ? levelViews[activeIndex + 1] ?? null : null;
+  const previousTarget = activeIndex > 0 ? levelViews[activeIndex - 1]?.targetOrders ?? 0 : 0;
+  const goalValue = activeLevel?.targetOrders ?? 0;
+
   const today = isCurrent ? Math.max(1, Math.min(totalDays, currentDay(env.APP_TIMEZONE, now))) : totalDays;
   let cumulative = 0;
-  const goalValue = goal?.targetOrders ?? 0;
   const chart = counts.map((count, index) => {
     cumulative += count;
     const day = index + 1;
@@ -129,7 +151,16 @@ export async function buildDashboardData(month = currentMonth(env.APP_TIMEZONE),
   const elapsedDays = isCurrent ? today : totalDays;
   const dailyAverage = orders.length / Math.max(1, elapsedDays);
   const projectedOrders = Math.round(dailyAverage * totalDays);
-  const progress = goalValue > 0 ? (orders.length / goalValue) * 100 : 0;
+  const progress = allCompleted
+    ? 100
+    : goalValue > 0
+      ? Math.min(100, (orders.length / goalValue) * 100)
+      : 0;
+  const stageProgress = allCompleted
+    ? 100
+    : activeLevel
+      ? Math.max(0, Math.min(100, ((orders.length - previousTarget) / Math.max(1, activeLevel.targetOrders - previousTarget)) * 100))
+      : 0;
   const remaining = Math.max(0, goalValue - orders.length);
   const remainingDaysIncludingToday = isCurrent ? Math.max(1, totalDays - today + 1) : 0;
   const requiredDaily = goalValue > 0 && remaining > 0 && remainingDaysIncludingToday > 0
@@ -155,6 +186,7 @@ export async function buildDashboardData(month = currentMonth(env.APP_TIMEZONE),
     summary: {
       orders: orders.length,
       goal: goalValue,
+      goalLabel: activeLevel?.label ?? "Nenhuma meta",
       progress: Number(progress.toFixed(1)),
       remaining,
       dailyAverage: Number(dailyAverage.toFixed(1)),
@@ -163,6 +195,15 @@ export async function buildDashboardData(month = currentMonth(env.APP_TIMEZONE),
       daysRemaining: isCurrent ? Math.max(0, totalDays - today) : 0,
       remainingDaysIncludingToday,
       monthEndsAt: selectedRange.monthEnd.toISOString()
+    },
+    goals: {
+      levels: levelViews,
+      activeLevel,
+      nextLevel,
+      completedCount,
+      totalCount: levelViews.length,
+      allCompleted,
+      stageProgress: Number(stageProgress.toFixed(1))
     },
     chart,
     recentOrders: recentOrders.map((order) => ({

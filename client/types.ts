@@ -1,3 +1,17 @@
+export type GoalLevel = {
+  id: string;
+  position: number;
+  label: string;
+  targetOrders: number;
+  achieved: boolean;
+  achievedAt: string | null;
+};
+
+export type GoalLevelInput = {
+  label: string;
+  targetOrders: number;
+};
+
 export type DashboardData = {
   connected: boolean;
   month: string;
@@ -17,6 +31,7 @@ export type DashboardData = {
   summary: {
     orders: number;
     goal: number;
+    goalLabel: string;
     progress: number;
     remaining: number;
     dailyAverage: number;
@@ -25,6 +40,15 @@ export type DashboardData = {
     daysRemaining: number;
     remainingDaysIncludingToday: number;
     monthEndsAt: string;
+  };
+  goals: {
+    levels: GoalLevel[];
+    activeLevel: GoalLevel | null;
+    nextLevel: GoalLevel | null;
+    completedCount: number;
+    totalCount: number;
+    allCompleted: boolean;
+    stageProgress: number;
   };
   chart: Array<{
     day: number;
@@ -71,4 +95,20 @@ export type NewOrderEvent = {
   total: number;
   status: string;
   occurredAt: string;
+};
+
+export type GoalAchievementEvent = {
+  id: string;
+  month: string;
+  levelId: string;
+  position: number;
+  label: string;
+  targetOrders: number;
+  orderCount: number;
+  achievedAt: string;
+  nextLevel: null | {
+    position: number;
+    label: string;
+    targetOrders: number;
+  };
 };

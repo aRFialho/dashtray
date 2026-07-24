@@ -12,7 +12,8 @@ import {
   trayMonthRange
 } from "../utils/date";
 import { buildDashboardData } from "./dashboard";
-import { emitDashboardUpdate, emitNewOrder } from "./realtime";
+import { evaluateGoalAchievements } from "./goal-progress";
+import { emitDashboardUpdate, emitGoalAchieved, emitNewOrder } from "./realtime";
 import { trayRequest } from "./tray-client";
 
 export type TrayOrder = {
@@ -164,8 +165,14 @@ export async function syncOrderById(store: TrayStore, orderId: string, rawAction
   const result = await upsertTrayOrder(store, response.Order, true);
   await prisma.trayStore.update({ where: { id: store.id }, data: { lastSyncAt: new Date() } });
 
-  const dashboard = await buildDashboardData(currentMonth(env.APP_TIMEZONE), store.id);
+  const month = currentMonth(env.APP_TIMEZONE);
+  const beforeAchievements = await buildDashboardData(month, store.id);
+  const achievements = await evaluateGoalAchievements(store.id, month, beforeAchievements.summary.orders);
+  const dashboard = achievements.length > 0
+    ? await buildDashboardData(month, store.id)
+    : beforeAchievements;
   emitDashboardUpdate(dashboard);
+  achievements.forEach(emitGoalAchieved);
 
   if (result.isNew) {
     emitNewOrder({
@@ -281,8 +288,13 @@ export async function syncMonth(store: TrayStore, month = currentMonth(env.APP_T
       })
     ]);
 
-    const dashboard = await buildDashboardData(month, store.id);
+    const beforeAchievements = await buildDashboardData(month, store.id);
+    const achievements = await evaluateGoalAchievements(store.id, month, beforeAchievements.summary.orders);
+    const dashboard = achievements.length > 0
+      ? await buildDashboardData(month, store.id)
+      : beforeAchievements;
     emitDashboardUpdate(dashboard);
+    achievements.forEach(emitGoalAchieved);
     return {
       items,
       pages,

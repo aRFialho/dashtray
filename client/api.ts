@@ -23,10 +23,10 @@ export const api = {
     }),
   logout: () => request<void>("/api/auth/logout", { method: "POST" }),
   dashboard: (month: string) => request<import("./types").DashboardData>(`/api/dashboard?month=${month}`),
-  saveGoal: (month: string, targetOrders: number) =>
+  saveGoals: (month: string, levels: import("./types").GoalLevelInput[]) =>
     request<{ dashboard: import("./types").DashboardData }>(`/api/goals/${month}`, {
       method: "PUT",
-      body: JSON.stringify({ targetOrders })
+      body: JSON.stringify({ levels })
     }),
   sync: (month: string) =>
     request<{ dashboard: import("./types").DashboardData }>("/api/sync", {

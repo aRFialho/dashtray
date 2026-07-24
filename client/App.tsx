@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { CalendarDays, Clock3, Gauge, Percent, ShoppingBag, Target } from "lucide-react";
 import { io } from "socket.io-client";
 import { api } from "./api";
+import { CelebrationOverlay } from "./components/CelebrationOverlay";
 import { GoalPanel } from "./components/GoalPanel";
 import { GoalSettings } from "./components/GoalSettings";
 import { Header } from "./components/Header";
@@ -13,7 +14,7 @@ import { RecentOrders } from "./components/RecentOrders";
 import { Sidebar, type ViewName } from "./components/Sidebar";
 import { TrayIntegration } from "./components/TrayIntegration";
 import { useClock } from "./hooks/useClock";
-import type { DashboardData, NewOrderEvent } from "./types";
+import type { DashboardData, GoalAchievementEvent, GoalLevelInput, NewOrderEvent } from "./types";
 
 
 function formatRemainingTime(monthEndsAt: string, now: Date): string {
@@ -55,6 +56,7 @@ export default function App() {
   const [lastOrder, setLastOrder] = useState<NewOrderEvent | null>(null);
   const [pulseKey, setPulseKey] = useState(0);
   const [notice, setNotice] = useState("");
+  const [celebrations, setCelebrations] = useState<GoalAchievementEvent[]>([]);
   const clock = useClock(60_000);
 
   const loadDashboard = useCallback(async (selectedMonth = month) => {
@@ -87,6 +89,12 @@ export default function App() {
       setPulseKey((key) => key + 1);
       setNotice(`Novo pedido #${order.trayOrderId} recebido.`);
     });
+    socket.on("goal:achieved", (achievement: GoalAchievementEvent) => {
+      setCelebrations((current) => current.some((item) => item.id === achievement.id)
+        ? current
+        : [...current, achievement]);
+      setNotice(`Meta atingida: ${achievement.label}!`);
+    });
     return () => {
       socket.disconnect();
     };
@@ -95,7 +103,7 @@ export default function App() {
   useEffect(() => {
     if (!auth.email) return;
     const refresh = () => loadDashboard(month).catch(() => undefined);
-    const interval = window.setInterval(refresh, 60_000);
+    const interval = window.setInterval(refresh, 180_000);
     const handleVisibility = () => {
       if (document.visibilityState === "visible") refresh();
     };
@@ -150,8 +158,8 @@ export default function App() {
     }
   }
 
-  async function saveGoal(target: number) {
-    const result = await api.saveGoal(month, target);
+  async function saveGoals(levels: GoalLevelInput[]) {
+    const result = await api.saveGoals(month, levels);
     setDashboard(result.dashboard);
   }
 
@@ -169,6 +177,10 @@ export default function App() {
     if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined);
   }
 
+  const dismissCelebration = useCallback(() => {
+    setCelebrations((current) => current.slice(1));
+  }, []);
+
   if (auth.loading) {
     return <div className="boot-screen"><div className="boot-screen__orb" /><span>Inicializando painel...</span></div>;
   }
@@ -176,10 +188,16 @@ export default function App() {
   if (!auth.email) return <LoginPage onLogin={login} />;
 
   if (liveMode && dashboard) {
-    return <LiveMode data={dashboard} lastOrder={lastOrder} pulseKey={pulseKey} onClose={() => void closeLiveMode()} />;
+    return (
+      <>
+        <LiveMode data={dashboard} lastOrder={lastOrder} pulseKey={pulseKey} onClose={() => void closeLiveMode()} />
+        {celebrations[0] && <CelebrationOverlay event={celebrations[0]} onClose={dismissCelebration} />}
+      </>
+    );
   }
 
   return (
+    <>
     <div className={`app-shell ${collapsed ? "app-shell--collapsed" : ""}`}>
       <Sidebar
         collapsed={collapsed}
@@ -223,7 +241,7 @@ export default function App() {
 
                   <section className="metrics-grid">
                     <MetricCard label="Pedidos no mês" value={dashboard.summary.orders} description={`Status: ${dashboard.trackedStatus}`} icon={ShoppingBag} tone="blue" />
-                    <MetricCard label="Meta do mês" value={dashboard.summary.goal} description="Definida pelo administrador" icon={Target} tone="purple" />
+                    <MetricCard label="Meta atual" value={dashboard.summary.goal} description={dashboard.summary.goalLabel} icon={Target} tone="purple" />
                     <MetricCard label="Faltam para a meta" value={dashboard.summary.remaining} description="Pedidos necessários para concluir" icon={Gauge} tone="red" />
                     <MetricCard label="Meta atingida" value={dashboard.summary.progress} suffix="%" decimals={1} description="Percentual alcançado no mês" icon={Percent} tone="green" />
                     <MetricCard label="Ritmo necessário" value={dashboard.summary.requiredDaily} suffix="/dia" description={`${dashboard.summary.remainingDaysIncludingToday} dias contando hoje`} icon={CalendarDays} tone="amber" />
@@ -259,7 +277,7 @@ export default function App() {
           )}
 
           {view === "goals" && dashboard && (
-            <GoalSettings data={dashboard} month={month} onSave={saveGoal} />
+            <GoalSettings data={dashboard} month={month} onSave={saveGoals} />
           )}
 
           {view === "integration" && (
@@ -268,5 +286,7 @@ export default function App() {
         </main>
       </div>
     </div>
+    {celebrations[0] && <CelebrationOverlay event={celebrations[0]} onClose={dismissCelebration} />}
+    </>
   );
 }

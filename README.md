@@ -1,5 +1,12 @@
 # Volt Tray Dashboard
 
+## Modo todos os pedidos do mês
+
+Para contar todos os pedidos, independentemente do status, use `STATUS=*`. A sincronização consulta o período do primeiro dia do mês atual até o fim do dia atual. O webhook aceita qualquer status e mantém o pedido atualizado.
+
+No Render, configure `APP_URL=https://dashtray.onrender.com`. Se o log informar autorização expirada ou revogada, abra a aba **Integração Tray** e autorize novamente a loja, pois tokens inválidos não podem ser recuperados pelo código.
+
+
 Painel dark, moderno e responsivo para acompanhar pedidos mensais da Tray, metas configuráveis e atualizações ao vivo.
 
 ## O que está pronto
@@ -134,7 +141,7 @@ O projeto combina três camadas:
 Altere o cron com:
 
 ```env
-SYNC_CRON=0 * * * *
+SYNC_CRON=*/3 * * * *
 ```
 
 Em planos gratuitos, o Render pode suspender a instância sem tráfego. O webhook reativa o serviço, mas uma instância sempre ativa oferece comportamento mais consistente para a reconciliação periódica.
@@ -166,3 +173,27 @@ npm run demo:seed
 - Render Blueprints: https://render.com/docs/blueprint-spec
 - Neon connection pooling: https://neon.com/docs/connect/connection-pooling
 - Prisma migrate deploy: https://www.prisma.io/docs/cli/migrate/deploy
+
+## Níveis de meta e atualização a cada 3 minutos
+
+A versão atual permite configurar até 8 níveis mensais de meta. Os níveis devem ser crescentes, por exemplo:
+
+- Meta Base: 1.000 pedidos
+- Meta Ouro: 1.250 pedidos
+- Meta Diamante: 1.500 pedidos
+
+Quando um nível é alcançado, o backend registra a conquista uma única vez na tabela `goal_achievements`, atualiza automaticamente a meta ativa e envia o evento `goal:achieved` por Socket.IO. O frontend exibe confetes, alerta festivo, som curto e a próxima meta.
+
+A nova migration é aplicada automaticamente no Render pelo comando `prisma migrate deploy`:
+
+```text
+prisma/migrations/202607240002_goal_levels/migration.sql
+```
+
+Para sincronizar os pedidos a cada 3 minutos, configure no ambiente local e no Render:
+
+```env
+SYNC_CRON=*/3 * * * *
+```
+
+A tela cheia mostra somente a tag animada `AO VIVO`. O gráfico desse modo exibe a quantidade de pedidos de cada dia; o dashboard administrativo mantém o gráfico acumulado versus ritmo da meta.

@@ -15,7 +15,7 @@ services:
       - key: APP_TIMEZONE
         value: America/Sao_Paulo
       - key: SYNC_CRON
-        value: "0 * * * *"
+        value: "*/3 * * * *"
       - key: STATUS
         value: "*"
       - key: DATABASE_URL

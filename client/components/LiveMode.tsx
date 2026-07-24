@@ -1,4 +1,4 @@
-import { Clock3, Gauge, Minimize2, Radio, Target } from "lucide-react";
+import { Clock3, Gauge, Minimize2, Radio, Target, Trophy } from "lucide-react";
 import { useAnimatedNumber } from "../hooks/useAnimatedNumber";
 import { useClock } from "../hooks/useClock";
 import type { DashboardData, NewOrderEvent } from "../types";
@@ -37,7 +37,7 @@ export function LiveMode(props: {
         <Brand />
         <div className="live-status">
           <span className="live-status__dot" />
-          <Radio size={16} /> AO VIVO · {props.data.trackedStatus}
+          <Radio size={16} /> AO VIVO
         </div>
         <div className="live-clock">
           <strong>{clock.toLocaleTimeString("pt-BR")}</strong>
@@ -65,14 +65,20 @@ export function LiveMode(props: {
             <div className="live-ring__center">
               <span>PEDIDOS NO MÊS</span>
               <strong>{Math.round(count).toLocaleString("pt-BR")}</strong>
-              <small>{props.data.summary.progress.toLocaleString("pt-BR")}% da meta</small>
+              <small>{props.data.summary.progress.toLocaleString("pt-BR")}% de {props.data.summary.goalLabel}</small>
             </div>
+          </div>
+
+          <div className="live-level-chip">
+            <Trophy size={18} />
+            <span>{props.data.goals.allCompleted ? "Todas as metas concluídas" : `Meta atual · ${props.data.summary.goalLabel}`}</span>
+            <strong>{props.data.summary.goal.toLocaleString("pt-BR")}</strong>
           </div>
 
           <div className="live-targets">
             <div>
               <Target size={21} />
-              <span>Meta</span>
+              <span>Meta atual</span>
               <strong>{props.data.summary.goal.toLocaleString("pt-BR")}</strong>
             </div>
             <div>
@@ -95,8 +101,8 @@ export function LiveMode(props: {
         <div className="live-chart-panel">
           <div className="live-chart-panel__header">
             <div>
-              <span className="eyebrow">EVOLUÇÃO EM TEMPO REAL</span>
-              <h2>Pedidos acumulados x ritmo da meta</h2>
+              <span className="eyebrow">RITMO DIÁRIO EM TEMPO REAL</span>
+              <h2>Número de pedidos por dia</h2>
             </div>
             {props.lastOrder && (
               <div className="live-last-order">
@@ -106,7 +112,7 @@ export function LiveMode(props: {
               </div>
             )}
           </div>
-          <OrdersChart data={props.data.chart} compact />
+          <OrdersChart data={props.data.chart} compact mode="daily" />
         </div>
       </main>
 

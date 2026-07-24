@@ -37,3 +37,7 @@ export function emitDashboardUpdate(payload: unknown): void {
 export function emitNewOrder(payload: unknown): void {
   io?.to("admins").emit("order:new", payload);
 }
+
+export function emitGoalAchieved(payload: unknown): void {
+  io?.to("admins").emit("goal:achieved", payload);
+}
