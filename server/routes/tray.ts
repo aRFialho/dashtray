@@ -226,8 +226,12 @@ apiRouter.post(
     const store = await getDefaultStore();
     if (!store) throw new HttpError(409, "Nenhuma loja conectada.");
 
+    const rawEventId = req.params.id;
+    const eventId = Array.isArray(rawEventId) ? rawEventId[0] : rawEventId;
+    if (!eventId) throw new HttpError(400, "ID do evento webhook inválido.");
+
     const event = await prisma.webhookEvent.findFirst({
-      where: { id: req.params.id, storeRecordId: store.id },
+      where: { id: eventId, storeRecordId: store.id },
       select: { id: true }
     });
     if (!event) throw new HttpError(404, "Evento webhook não encontrado.");
