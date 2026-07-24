@@ -65,7 +65,9 @@ export async function buildDashboardData(month = currentMonth(env.APP_TIMEZONE),
   const where: Prisma.OrderWhereInput = {
     storeRecordId: store.id,
     orderDate: { gte: selectedRange.start, lt: selectedRange.end },
-    status: { in: env.trackedStatuses, mode: "insensitive" }
+    ...(env.trackAllStatuses
+      ? {}
+      : { status: { in: env.trackedStatuses, mode: "insensitive" as const } })
   };
 
   const [orders, goal, recentOrders, lastSync] = await Promise.all([

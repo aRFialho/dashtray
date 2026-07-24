@@ -7,7 +7,7 @@ const envSchema = z.object({
   APP_URL: z.string().url().default("http://localhost:3000"),
   APP_TIMEZONE: z.string().default("America/Sao_Paulo"),
   SYNC_CRON: z.string().default("0 * * * *"),
-  STATUS: z.string().trim().min(1, "Informe pelo menos um status de pedido monitorado."),
+  STATUS: z.string().trim().default("*"),
   DATABASE_URL: z.string().min(1),
   DIRECT_URL: z.string().min(1),
   TRAY_CONSUMER_KEY: z.string().default(""),
@@ -28,23 +28,32 @@ if (!parsed.success) {
   throw new Error("Configuração de ambiente inválida.");
 }
 
-const trackedStatuses = Array.from(
-  new Set(
-    parsed.data.STATUS.split(",")
-      .map((status) => status.trim().toUpperCase())
-      .filter(Boolean)
-  )
+const rawStatus = parsed.data.STATUS.trim();
+const trackAllStatuses = ["", "*", "ALL", "TODOS", "TODOS OS STATUS", "TODOS OS STATUSES"].includes(
+  rawStatus.toUpperCase()
 );
 
-if (trackedStatuses.length === 0) {
-  throw new Error("Informe pelo menos um status válido em STATUS.");
+const trackedStatuses = trackAllStatuses
+  ? []
+  : Array.from(
+      new Set(
+        rawStatus
+          .split(",")
+          .map((status) => status.trim().toUpperCase())
+          .filter(Boolean)
+      )
+    );
+
+if (!trackAllStatuses && trackedStatuses.length === 0) {
+  throw new Error("Informe STATUS=* para todos os pedidos ou uma lista de status separada por vírgula.");
 }
 
 export const env = {
   ...parsed.data,
   APP_URL: parsed.data.APP_URL.replace(/\/$/, ""),
+  trackAllStatuses,
   trackedStatuses,
-  trackedStatus: trackedStatuses.join(", "),
+  trackedStatus: trackAllStatuses ? "TODOS OS STATUS" : trackedStatuses.join(", "),
   allowedTrayHostnames: parsed.data.TRAY_ALLOWED_HOSTNAMES.split(",")
     .map((hostname) => hostname.trim().toLowerCase())
     .filter(Boolean)

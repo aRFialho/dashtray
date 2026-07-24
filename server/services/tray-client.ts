@@ -3,6 +3,7 @@ import { env } from "../config/env";
 import { prisma } from "../db";
 import { decryptSecret, encryptSecret } from "./crypto";
 import { HttpError } from "../utils/http-error";
+import { parseTrayDateTime } from "../utils/date";
 
 export type TrayTokenResponse = {
   message: string;
@@ -83,9 +84,42 @@ function normalizeApiAddress(value: string): string {
 }
 
 function parseTrayTokenDate(value: string): Date {
-  const parsed = new Date(value.includes("T") ? value : value.replace(" ", "T") + "Z");
-  if (Number.isNaN(parsed.getTime())) throw new Error(`Data de token inválida recebida da Tray: ${value}`);
+  const parsed = parseTrayDateTime(value, env.APP_TIMEZONE);
+  if (!parsed) throw new Error(`Data de token inválida recebida da Tray: ${value}`);
   return parsed;
+}
+
+function isUnauthorizedPayload(payload: TrayErrorPayload | null): boolean {
+  if (!payload) return false;
+  const code = Number(payload.code);
+  const message = `${payload.message ?? ""} ${payload.name ?? ""}`.trim().toLowerCase();
+  return (
+    code === 401 ||
+    code === 403 ||
+    message.includes("unauthorized access") ||
+    message.includes("invalid or expired token") ||
+    message.includes("token expirado") ||
+    message.includes("token inválido")
+  );
+}
+
+async function isUnauthorizedResponse(response: Response): Promise<boolean> {
+  if (response.status === 401 || response.status === 403) return true;
+
+  try {
+    const text = await response.clone().text();
+    if (!text) return false;
+    return isUnauthorizedPayload(JSON.parse(text) as TrayErrorPayload);
+  } catch {
+    return false;
+  }
+}
+
+function isUnauthorizedError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error instanceof HttpError && (error.status === 401 || error.status === 403)) return true;
+  const message = error.message.toLowerCase();
+  return message.includes("unauthorized access") || message.includes("invalid or expired token");
 }
 
 async function parseTrayResponse<T>(response: Response): Promise<T> {
@@ -98,8 +132,12 @@ async function parseTrayResponse<T>(response: Response): Promise<T> {
     throw new HttpError(response.status || 502, "A Tray retornou uma resposta que não é JSON.");
   }
 
+  const error = payload as TrayErrorPayload | null;
+  if (isUnauthorizedPayload(error)) {
+    throw new HttpError(401, error?.message || error?.name || "Token Tray inválido ou expirado.", error);
+  }
+
   if (!response.ok) {
-    const error = payload as TrayErrorPayload | null;
     throw new HttpError(response.status, error?.message || error?.name || "Erro ao consultar a Tray.", error);
   }
 
@@ -204,7 +242,18 @@ export async function getValidStore(store: TrayStore, forceRefresh = false): Pro
     throw new HttpError(401, "O refresh_token da Tray expirou. Reautorize o aplicativo.");
   }
 
-  return refreshStoreToken(store);
+  try {
+    return await refreshStoreToken(store);
+  } catch (error) {
+    if (isUnauthorizedError(error)) {
+      await prisma.trayStore.update({ where: { id: store.id }, data: { active: false } });
+      throw new HttpError(
+        401,
+        "A autorização da Tray expirou ou foi revogada. Conecte novamente a loja na aba Integração Tray."
+      );
+    }
+    throw error;
+  }
 }
 
 export async function trayRequest<T>(
@@ -229,7 +278,7 @@ export async function trayRequest<T>(
     signal: AbortSignal.timeout(25_000)
   });
 
-  if (response.status === 401 && tokenRetry) {
+  if (tokenRetry && await isUnauthorizedResponse(response)) {
     await response.body?.cancel();
     const refreshed = await getValidStore(store, true);
     return trayRequest<T>(refreshed, path, params, attempt, false);

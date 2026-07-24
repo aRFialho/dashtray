@@ -55,7 +55,7 @@ function normalizeStatus(order: TrayOrder): string {
 }
 
 function isTrackedStatus(order: TrayOrder): boolean {
-  return env.trackedStatuses.includes(normalizeStatus(order));
+  return env.trackAllStatuses || env.trackedStatuses.includes(normalizeStatus(order));
 }
 
 function normalizeWebhookAction(action: string): string {
@@ -202,9 +202,13 @@ export async function syncMonth(store: TrayStore, month = currentMonth(env.APP_T
   const syncedOrderIds = new Set<string>();
 
   try {
-    // A API documenta o filtro status como String. Para múltiplos status,
-    // consultamos um por vez e consolidamos os pedidos no banco.
-    for (const trackedStatus of env.trackedStatuses) {
+    // STATUS=* busca todos os pedidos do período em uma única paginação.
+    // Quando há uma lista, a API recebe um status por requisição e consolidamos por ID.
+    const statusQueries: Array<string | undefined> = env.trackAllStatuses
+      ? [undefined]
+      : env.trackedStatuses;
+
+    for (const trackedStatus of statusQueries) {
       let page = 1;
 
       while (page <= MAX_MONTH_PAGES) {
@@ -235,7 +239,7 @@ export async function syncMonth(store: TrayStore, month = currentMonth(env.APP_T
 
         if (expectedPages > MAX_MONTH_PAGES) {
           throw new Error(
-            `O status ${trackedStatus} possui ${expectedPages} páginas, acima do limite de segurança de ${MAX_MONTH_PAGES}.`
+            `${trackedStatus ? `O status ${trackedStatus}` : "A busca de todos os status"} possui ${expectedPages} páginas, acima do limite de segurança de ${MAX_MONTH_PAGES}.`
           );
         }
 
@@ -246,15 +250,20 @@ export async function syncMonth(store: TrayStore, month = currentMonth(env.APP_T
 
     items = syncedOrderIds.size;
 
-    // Remove registros antigos que deixaram o STATUS monitorado ou não vieram mais na reconciliação.
+    // Remove registros do período que não vieram na reconciliação. Quando STATUS não é "*",
+    // também elimina pedidos que deixaram a lista de status monitorados.
     await prisma.order.deleteMany({
       where: {
         storeRecordId: store.id,
         orderDate: { gte: databaseRange.start, lt: databaseRange.end },
-        OR: [
-          { status: { notIn: env.trackedStatuses, mode: "insensitive" } },
-          { updatedAt: { lt: syncStartedAt } }
-        ]
+        ...(env.trackAllStatuses
+          ? { updatedAt: { lt: syncStartedAt } }
+          : {
+              OR: [
+                { status: { notIn: env.trackedStatuses, mode: "insensitive" } },
+                { updatedAt: { lt: syncStartedAt } }
+              ]
+            })
       }
     });
 
@@ -274,7 +283,13 @@ export async function syncMonth(store: TrayStore, month = currentMonth(env.APP_T
 
     const dashboard = await buildDashboardData(month, store.id);
     emitDashboardUpdate(dashboard);
-    return { items, pages, statuses: env.trackedStatuses, period: apiRange, dashboard };
+    return {
+      items,
+      pages,
+      statuses: env.trackAllStatuses ? ["*"] : env.trackedStatuses,
+      period: apiRange,
+      dashboard
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Erro desconhecido";
     await prisma.syncLog.update({

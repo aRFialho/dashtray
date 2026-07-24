@@ -17,7 +17,7 @@ services:
       - key: SYNC_CRON
         value: "0 * * * *"
       - key: STATUS
-        sync: false
+        value: "*"
       - key: DATABASE_URL
         sync: false
       - key: DIRECT_URL
