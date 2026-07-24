@@ -1,9 +1,20 @@
-import { Minimize2, Radio, Target } from "lucide-react";
+import { Clock3, Gauge, Minimize2, Radio, Target } from "lucide-react";
 import { useAnimatedNumber } from "../hooks/useAnimatedNumber";
 import { useClock } from "../hooks/useClock";
 import type { DashboardData, NewOrderEvent } from "../types";
 import { Brand } from "./Brand";
 import { OrdersChart } from "./OrdersChart";
+
+function formatRemainingTime(monthEndsAt: string, now: Date): string {
+  const milliseconds = Math.max(0, new Date(monthEndsAt).getTime() - now.getTime());
+  if (milliseconds <= 0) return "Encerrado";
+
+  const totalMinutes = Math.floor(milliseconds / 60_000);
+  const days = Math.floor(totalMinutes / 1_440);
+  const hours = Math.floor((totalMinutes % 1_440) / 60);
+  const minutes = totalMinutes % 60;
+  return `${days}d ${hours}h ${minutes}min`;
+}
 
 export function LiveMode(props: {
   data: DashboardData;
@@ -26,7 +37,7 @@ export function LiveMode(props: {
         <Brand />
         <div className="live-status">
           <span className="live-status__dot" />
-          <Radio size={16} /> AO VIVO
+          <Radio size={16} /> AO VIVO · {props.data.trackedStatus}
         </div>
         <div className="live-clock">
           <strong>{clock.toLocaleTimeString("pt-BR")}</strong>
@@ -65,12 +76,18 @@ export function LiveMode(props: {
               <strong>{props.data.summary.goal.toLocaleString("pt-BR")}</strong>
             </div>
             <div>
+              <Gauge size={21} />
               <span>Faltam</span>
               <strong>{props.data.summary.remaining.toLocaleString("pt-BR")}</strong>
             </div>
             <div>
-              <span>Média diária</span>
-              <strong>{props.data.summary.dailyAverage.toLocaleString("pt-BR")}</strong>
+              <span>Ritmo necessário</span>
+              <strong>{props.data.summary.requiredDaily.toLocaleString("pt-BR")}/dia</strong>
+            </div>
+            <div>
+              <Clock3 size={21} />
+              <span>Tempo restante</span>
+              <strong className="live-targets__time">{formatRemainingTime(props.data.summary.monthEndsAt, clock)}</strong>
             </div>
           </div>
         </div>

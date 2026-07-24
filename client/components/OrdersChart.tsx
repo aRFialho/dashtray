@@ -32,7 +32,7 @@ export function OrdersChart({ data, compact = false }: { data: DashboardData["ch
               boxShadow: "0 18px 45px rgba(0,0,0,.35)"
             }}
             labelFormatter={(day) => `Dia ${day}`}
-            formatter={(value, name) => [Number(value).toLocaleString("pt-BR"), name === "orders" ? "Pedidos" : "Ritmo da meta"]}
+            formatter={(value, name) => [Number(value ?? 0).toLocaleString("pt-BR"), name === "orders" ? "Pedidos" : "Ritmo da meta"]}
           />
           <Area type="monotone" dataKey="orders" stroke="#3b7bff" strokeWidth={3} fill="url(#ordersFill)" animationDuration={900} />
           <Line

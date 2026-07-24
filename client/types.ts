@@ -1,6 +1,11 @@
 export type DashboardData = {
   connected: boolean;
   month: string;
+  trackedStatus: string;
+  period: {
+    start: string;
+    end: string;
+  };
   store: null | {
     id: string;
     storeId: string;
@@ -16,11 +21,15 @@ export type DashboardData = {
     remaining: number;
     dailyAverage: number;
     projectedOrders: number;
+    requiredDaily: number;
+    daysRemaining: number;
+    remainingDaysIncludingToday: number;
+    monthEndsAt: string;
   };
   chart: Array<{
     day: number;
-    orders: number;
-    dailyOrders: number;
+    orders: number | null;
+    dailyOrders: number | null;
     target: number;
   }>;
   recentOrders: Array<{

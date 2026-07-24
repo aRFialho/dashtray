@@ -1,7 +1,15 @@
 import type { Prisma } from "@prisma/client";
 import { env } from "../config/env";
 import { prisma } from "../db";
-import { currentDay, currentMonth, dayInTimeZone, daysInMonth, monthRangeUtc, parseMonthKey } from "../utils/date";
+import {
+  currentDay,
+  currentMonth,
+  dayInTimeZone,
+  daysInMonth,
+  liveMonthRangeUtc,
+  monthRangeUtc,
+  parseMonthKey
+} from "../utils/date";
 
 export async function getDefaultStore() {
   return prisma.trayStore.findFirst({
@@ -10,40 +18,55 @@ export async function getDefaultStore() {
   });
 }
 
-export async function buildDashboardData(month = currentMonth(), storeRecordId?: string) {
+export async function buildDashboardData(month = currentMonth(env.APP_TIMEZONE), storeRecordId?: string) {
+  const now = new Date();
   const parts = parseMonthKey(month);
+  const currentMonthKey = currentMonth(env.APP_TIMEZONE, now);
+  const isCurrent = month === currentMonthKey;
+  const totalDays = daysInMonth(parts);
+  const fullMonthRange = monthRangeUtc(parts, env.APP_TIMEZONE);
+  const selectedRange = isCurrent
+    ? liveMonthRangeUtc(env.APP_TIMEZONE, now)
+    : { ...fullMonthRange, monthEnd: fullMonthRange.end };
   const store = storeRecordId
     ? await prisma.trayStore.findUnique({ where: { id: storeRecordId } })
     : await getDefaultStore();
+
+  const emptySummary = {
+    orders: 0,
+    goal: 0,
+    progress: 0,
+    remaining: 0,
+    dailyAverage: 0,
+    projectedOrders: 0,
+    requiredDaily: 0,
+    daysRemaining: isCurrent ? Math.max(0, totalDays - currentDay(env.APP_TIMEZONE, now)) : 0,
+    remainingDaysIncludingToday: isCurrent ? Math.max(1, totalDays - currentDay(env.APP_TIMEZONE, now) + 1) : 0,
+    monthEndsAt: selectedRange.monthEnd.toISOString()
+  };
 
   if (!store) {
     return {
       connected: false,
       month,
-      store: null,
-      summary: {
-        orders: 0,
-        goal: 0,
-        progress: 0,
-        remaining: 0,
-        dailyAverage: 0,
-        projectedOrders: 0
+      trackedStatus: env.trackedStatus,
+      period: {
+        start: selectedRange.start.toISOString(),
+        end: selectedRange.end.toISOString()
       },
+      store: null,
+      summary: emptySummary,
       chart: [],
       recentOrders: [],
       sync: null
     };
   }
 
-  const { start, end } = monthRangeUtc(parts);
   const where: Prisma.OrderWhereInput = {
     storeRecordId: store.id,
-    orderDate: { gte: start, lt: end }
+    orderDate: { gte: selectedRange.start, lt: selectedRange.end },
+    status: { in: env.trackedStatuses, mode: "insensitive" }
   };
-
-  if (env.excludedStatuses.length) {
-    where.status = { notIn: env.excludedStatuses, mode: "insensitive" };
-  }
 
   const [orders, goal, recentOrders, lastSync] = await Promise.all([
     prisma.order.findMany({
@@ -81,13 +104,13 @@ export async function buildDashboardData(month = currentMonth(), storeRecordId?:
     })
   ]);
 
-  const totalDays = daysInMonth(parts);
   const counts = Array.from({ length: totalDays }, () => 0);
   orders.forEach((order) => {
     const day = dayInTimeZone(order.orderDate, env.APP_TIMEZONE);
     if (day >= 1 && day <= totalDays) counts[day - 1] = (counts[day - 1] ?? 0) + 1;
   });
 
+  const today = isCurrent ? Math.max(1, Math.min(totalDays, currentDay(env.APP_TIMEZONE, now))) : totalDays;
   let cumulative = 0;
   const goalValue = goal?.targetOrders ?? 0;
   const chart = counts.map((count, index) => {
@@ -95,21 +118,30 @@ export async function buildDashboardData(month = currentMonth(), storeRecordId?:
     const day = index + 1;
     return {
       day,
-      orders: cumulative,
-      dailyOrders: count,
+      orders: !isCurrent || day <= today ? cumulative : null,
+      dailyOrders: !isCurrent || day <= today ? count : null,
       target: goalValue > 0 ? Math.round((goalValue / totalDays) * day) : 0
     };
   });
 
-  const isCurrent = month === currentMonth(env.APP_TIMEZONE);
-  const elapsedDays = isCurrent ? Math.max(1, Math.min(totalDays, currentDay(env.APP_TIMEZONE))) : totalDays;
-  const dailyAverage = orders.length / elapsedDays;
+  const elapsedDays = isCurrent ? today : totalDays;
+  const dailyAverage = orders.length / Math.max(1, elapsedDays);
   const projectedOrders = Math.round(dailyAverage * totalDays);
-  const progress = goalValue > 0 ? Math.min(999, (orders.length / goalValue) * 100) : 0;
+  const progress = goalValue > 0 ? (orders.length / goalValue) * 100 : 0;
+  const remaining = Math.max(0, goalValue - orders.length);
+  const remainingDaysIncludingToday = isCurrent ? Math.max(1, totalDays - today + 1) : 0;
+  const requiredDaily = goalValue > 0 && remaining > 0 && remainingDaysIncludingToday > 0
+    ? Math.ceil(remaining / remainingDaysIncludingToday)
+    : 0;
 
   return {
     connected: true,
     month,
+    trackedStatus: env.trackedStatus,
+    period: {
+      start: selectedRange.start.toISOString(),
+      end: selectedRange.end.toISOString()
+    },
     store: {
       id: store.id,
       storeId: store.storeId,
@@ -122,9 +154,13 @@ export async function buildDashboardData(month = currentMonth(), storeRecordId?:
       orders: orders.length,
       goal: goalValue,
       progress: Number(progress.toFixed(1)),
-      remaining: Math.max(0, goalValue - orders.length),
+      remaining,
       dailyAverage: Number(dailyAverage.toFixed(1)),
-      projectedOrders
+      projectedOrders,
+      requiredDaily,
+      daysRemaining: isCurrent ? Math.max(0, totalDays - today) : 0,
+      remainingDaysIncludingToday,
+      monthEndsAt: selectedRange.monthEnd.toISOString()
     },
     chart,
     recentOrders: recentOrders.map((order) => ({

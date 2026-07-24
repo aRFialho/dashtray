@@ -10,6 +10,7 @@ import goalsRouter from "./routes/goals";
 import healthRouter from "./routes/health";
 import syncRouter from "./routes/sync";
 import { apiRouter as trayApiRouter, publicRouter as trayPublicRouter } from "./routes/tray";
+import { env } from "./config/env";
 import { HttpError } from "./utils/http-error";
 
 export function createApp() {
@@ -56,14 +57,24 @@ export function createApp() {
   app.use("/api/tray", trayApiRouter);
   app.use("/tray", trayPublicRouter);
 
-  const clientDir = path.resolve(process.cwd(), "dist/client");
-  app.use(express.static(clientDir, { index: false, maxAge: "1h" }));
+  if (env.NODE_ENV === "production") {
+    const clientDir = path.resolve(process.cwd(), "dist/client");
+    app.use(express.static(clientDir, { index: false, maxAge: "1h" }));
 
-  app.get(/.*/, (req, res, next) => {
-    if (req.path.startsWith("/api/") || req.path.startsWith("/health") || req.path.startsWith("/tray/")) return next();
-    if (!req.accepts("html")) return next();
-    res.sendFile(path.join(clientDir, "index.html"));
-  });
+    app.get(/.*/, (req, res, next) => {
+      if (
+        req.path.startsWith("/api/") ||
+        req.path.startsWith("/health") ||
+        req.path === "/tray" ||
+        req.path.startsWith("/tray/")
+      ) {
+        return next();
+      }
+
+      if (!req.accepts("html")) return next();
+      return res.sendFile(path.join(clientDir, "index.html"));
+    });
+  }
 
   app.use((_req, _res, next) => next(new HttpError(404, "Rota não encontrada.")));
 

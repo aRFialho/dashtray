@@ -7,15 +7,15 @@ Painel dark, moderno e responsivo para acompanhar pedidos mensais da Tray, metas
 - Autorização oficial da Tray com `consumer_key`, `consumer_secret`, `code` e `api_address`.
 - Renovação automática de `access_token` usando `refresh_token`.
 - Tokens criptografados no Neon com AES-256-GCM.
-- Carga inicial do mês via `GET /orders`, paginação de 50 registros e filtro de data.
+- Carga do primeiro dia do mês atual até o dia atual via `GET /orders`, paginação de 50 registros e filtro por `STATUS`.
 - Webhook `order_insert`, `order_update` e `order_delete`.
 - Deduplicação de notificações idênticas em janelas de 30 segundos.
 - Retentativa persistente de webhooks com backoff exponencial e recuperação após reinício.
-- Fila de requisições por loja para permanecer abaixo do limite por minuto da Tray.
+- Fila de requisições por loja para respeitar os limites da Tray.
 - Fechamento mensal e agrupamento diário no fuso `America/Sao_Paulo`.
 - Socket.IO para atualizar o contador, gráfico e pedidos recentes sem recarregar a página.
-- Meta mensal editável pelo administrador.
-- Menu lateral ocultável para liberar toda a largura e modo de tela cheia com contador animado.
+- Meta mensal editável, percentual atingido, faltantes, ritmo diário necessário e contagem regressiva até o fim do mês.
+- Menu lateral recolhível e modo de tela cheia com contador animado.
 - Prisma Migrate executado automaticamente no start do Render.
 - Autenticação administrativa por cookie HTTP-only.
 - Health check em `/health`.
@@ -63,8 +63,10 @@ Preencha no `.env`:
 ```env
 TRAY_CONSUMER_KEY=...
 TRAY_CONSUMER_SECRET=...
-TRAY_ALLOWED_HOSTNAMES=www.drossiinteriores.com.br,drossiinteriores.com.br,*.commercesuite.com.br,*.tray.com.br
+STATUS=A ENVIAR
 ```
+
+`STATUS` deve ser exatamente o nome do status da Tray que entrará no contador. A listagem mensal e cada pedido consultado após o webhook passam por esse mesmo filtro.
 
 O código de autorização de 64 caracteres não deve entrar no Git. Há três maneiras de concluir a conexão:
 
@@ -112,17 +114,11 @@ Recomendação: PNG transparente, aproximadamente 320 x 96 px. Caso o arquivo n�
 5. Em `APP_URL`, informe a URL final, por exemplo `https://volt-tray-dashboard.onrender.com`.
 6. Faça o deploy.
 
-Os scripts usados pelo Blueprint são:
-
-```text
-scripts/render-build.sh
-scripts/render-start.sh
-```
-
-O script de inicialização executa `prisma migrate deploy` no Neon antes de subir o servidor. Para aplicar migrations manualmente, use:
+O comando de inicialização executa:
 
 ```bash
-bash scripts/neon-migrate.sh
+prisma migrate deploy
+node dist/server/index.js
 ```
 
 Assim, cada deploy aplica as migrations pendentes antes de iniciar o servidor.
@@ -131,9 +127,9 @@ Assim, cada deploy aplica as migrations pendentes antes de iniciar o servidor.
 
 O projeto combina três camadas:
 
-- **Carga mensal inicial:** busca todas as páginas de pedidos do mês.
-- **Webhook:** ao receber o ID de um pedido, consulta somente aquele registro.
-- **Reconciliação automática:** o cron repete a sincronização do mês a cada hora por padrão.
+- **Carga mensal inicial:** busca todas as páginas do primeiro dia do mês atual até o dia de hoje, usando o `STATUS` configurado.
+- **Webhook:** ao receber o ID de um pedido, consulta o registro completo e só mantém no contador se a data estiver no mês atual e o status for igual a `STATUS`.
+- **Reconciliação automática:** o cron repete a sincronização do período ao vivo a cada hora por padrão e remove registros que deixaram o status monitorado.
 
 Altere o cron com:
 
@@ -141,13 +137,11 @@ Altere o cron com:
 SYNC_CRON=0 * * * *
 ```
 
-O `render.yaml` está no plano gratuito para homologação. Nesse plano, a instância pode suspender sem tráfego e o primeiro webhook após a pausa pode sofrer atraso de inicialização. Para um placar realmente contínuo em TV ou operação, altere o plano para uma instância sempre ativa.
+Em planos gratuitos, o Render pode suspender a instância sem tráfego. O webhook reativa o serviço, mas uma instância sempre ativa oferece comportamento mais consistente para a reconciliação periódica.
 
 ## 7. Scripts úteis
 
 ```bash
-npm run verify
-# ou separadamente:
 npm run typecheck
 npm test
 npm run build
@@ -159,11 +153,10 @@ npm run demo:seed
 
 ## 8. Segurança
 
-- Nunca envie `consumer_secret`, códigos de autorização, tokens, `DATABASE_URL` ou chaves de criptografia para o Git.
+- Nunca envie `consumer_secret`, tokens, `DATABASE_URL` ou chaves de criptografia para o Git.
 - Use um `TRAY_WEBHOOK_TOKEN` longo na URL registrada.
 - Se a chave `TOKEN_ENCRYPTION_KEY` for trocada, os tokens já gravados não poderão ser descriptografados. Reautorize a loja após a troca.
 - O webhook responde HTTP 200 rapidamente e processa o evento após persistir a notificação.
-- Falhas transitórias da Tray são repetidas; eventos com falha ficam no Neon e são retomados pelo scheduler.
 - O payload da Tray não possui assinatura documentada. Por isso o projeto valida o token secreto da URL e o `seller_id` contra lojas autorizadas.
 
 ## Documentação consultada

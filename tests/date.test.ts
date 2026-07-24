@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   daysInMonth,
+  liveMonthRangeUtc,
   monthRangeUtc,
   parseMonthKey,
   parseTrayDate,
+  trayLiveMonthRange,
   trayMonthRange
 } from "../server/utils/date";
 
@@ -22,6 +24,20 @@ describe("month helpers", () => {
       startDate: "2026-07-01",
       endDate: "2026-07-31"
     });
+  });
+
+
+  it("limita o período ao vivo do primeiro dia até o dia atual", () => {
+    const now = new Date("2026-07-24T13:00:00.000Z");
+    expect(trayLiveMonthRange("America/Sao_Paulo", now)).toEqual({
+      startDate: "2026-07-01",
+      endDate: "2026-07-24 23:59:59"
+    });
+
+    const range = liveMonthRangeUtc("America/Sao_Paulo", now);
+    expect(range.start.toISOString()).toBe("2026-07-01T03:00:00.000Z");
+    expect(range.end.toISOString()).toBe("2026-07-25T03:00:00.000Z");
+    expect(range.monthEnd.toISOString()).toBe("2026-08-01T03:00:00.000Z");
   });
 
   it("converte o mês de São Paulo para intervalo UTC exclusivo", () => {

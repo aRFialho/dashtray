@@ -58,12 +58,15 @@ export function zonedDateTimeToUtc(input: DateTimeParts, timeZone = DEFAULT_TIME
   return candidate;
 }
 
-export function currentMonth(timeZone = process.env.APP_TIMEZONE || DEFAULT_TIMEZONE): string {
+export function currentMonth(
+  timeZone = process.env.APP_TIMEZONE || DEFAULT_TIMEZONE,
+  now = new Date()
+): string {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
     year: "numeric",
     month: "2-digit"
-  }).formatToParts(new Date());
+  }).formatToParts(now);
 
   const year = parts.find((part) => part.type === "year")?.value;
   const month = parts.find((part) => part.type === "month")?.value;
@@ -72,9 +75,24 @@ export function currentMonth(timeZone = process.env.APP_TIMEZONE || DEFAULT_TIME
   return `${year}-${month}`;
 }
 
-export function currentDay(timeZone = process.env.APP_TIMEZONE || DEFAULT_TIMEZONE): number {
-  const day = new Intl.DateTimeFormat("en-US", { timeZone, day: "2-digit" }).format(new Date());
+export function currentDay(
+  timeZone = process.env.APP_TIMEZONE || DEFAULT_TIMEZONE,
+  now = new Date()
+): number {
+  const day = new Intl.DateTimeFormat("en-US", { timeZone, day: "2-digit" }).format(now);
   return Number(day);
+}
+
+export function currentDateParts(
+  timeZone = process.env.APP_TIMEZONE || DEFAULT_TIMEZONE,
+  now = new Date()
+): MonthParts & { day: number } {
+  const parts = numericParts(now, timeZone);
+  return {
+    year: parts.year ?? now.getUTCFullYear(),
+    month: parts.month ?? now.getUTCMonth() + 1,
+    day: parts.day ?? now.getUTCDate()
+  };
 }
 
 export function dayInTimeZone(date: Date, timeZone = process.env.APP_TIMEZONE || DEFAULT_TIMEZONE): number {
@@ -114,6 +132,42 @@ export function trayMonthRange({ year, month }: MonthParts): { startDate: string
   return {
     startDate: `${year}-${String(month).padStart(2, "0")}-01`,
     endDate: `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`
+  };
+}
+
+
+export function liveMonthRangeUtc(
+  timeZone = process.env.APP_TIMEZONE || DEFAULT_TIMEZONE,
+  now = new Date()
+): { start: Date; end: Date; monthEnd: Date } {
+  const today = currentDateParts(timeZone, now);
+  const totalDays = daysInMonth(today);
+  const nextDay = today.day < totalDays
+    ? { year: today.year, month: today.month, day: today.day + 1 }
+    : today.month === 12
+      ? { year: today.year + 1, month: 1, day: 1 }
+      : { year: today.year, month: today.month + 1, day: 1 };
+  const nextMonth = today.month === 12
+    ? { year: today.year + 1, month: 1 }
+    : { year: today.year, month: today.month + 1 };
+
+  return {
+    start: zonedDateTimeToUtc({ ...today, day: 1, hour: 0, minute: 0, second: 0 }, timeZone),
+    end: zonedDateTimeToUtc({ ...nextDay, hour: 0, minute: 0, second: 0 }, timeZone),
+    monthEnd: zonedDateTimeToUtc({ ...nextMonth, day: 1, hour: 0, minute: 0, second: 0 }, timeZone)
+  };
+}
+
+export function trayLiveMonthRange(
+  timeZone = process.env.APP_TIMEZONE || DEFAULT_TIMEZONE,
+  now = new Date()
+): { startDate: string; endDate: string } {
+  const today = currentDateParts(timeZone, now);
+  const month = String(today.month).padStart(2, "0");
+  const day = String(today.day).padStart(2, "0");
+  return {
+    startDate: `${today.year}-${month}-01`,
+    endDate: `${today.year}-${month}-${day} 23:59:59`
   };
 }
 

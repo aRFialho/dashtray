@@ -26,6 +26,16 @@ export function GoalPanel({ data, onEdit }: { data: DashboardData; onEdit: () =>
           <strong>{data.summary.projectedOrders.toLocaleString("pt-BR")}</strong>
           <small>até o fim do mês</small>
         </div>
+        <div>
+          <span>Ritmo necessário</span>
+          <strong>{data.summary.requiredDaily.toLocaleString("pt-BR")}</strong>
+          <small>pedidos por dia</small>
+        </div>
+        <div>
+          <span>Dias completos restantes</span>
+          <strong>{data.summary.daysRemaining.toLocaleString("pt-BR")}</strong>
+          <small>sem contar o dia atual</small>
+        </div>
       </div>
 
       <div className="progress-block">

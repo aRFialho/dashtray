@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarDays, ShoppingBag, Target, TrendingUp } from "lucide-react";
+import { CalendarDays, Clock3, Gauge, Percent, ShoppingBag, Target } from "lucide-react";
 import { io } from "socket.io-client";
 import { api } from "./api";
 import { GoalPanel } from "./components/GoalPanel";
@@ -12,7 +12,28 @@ import { OrdersChart } from "./components/OrdersChart";
 import { RecentOrders } from "./components/RecentOrders";
 import { Sidebar, type ViewName } from "./components/Sidebar";
 import { TrayIntegration } from "./components/TrayIntegration";
+import { useClock } from "./hooks/useClock";
 import type { DashboardData, NewOrderEvent } from "./types";
+
+
+function formatRemainingTime(monthEndsAt: string, now: Date): string {
+  const milliseconds = Math.max(0, new Date(monthEndsAt).getTime() - now.getTime());
+  if (milliseconds <= 0) return "Encerrado";
+
+  const totalMinutes = Math.floor(milliseconds / 60_000);
+  const days = Math.floor(totalMinutes / 1_440);
+  const hours = Math.floor((totalMinutes % 1_440) / 60);
+  const minutes = totalMinutes % 60;
+  return `${days}d ${hours}h ${minutes}min`;
+}
+
+function formatDashboardPeriod(start: string, end: string): string {
+  const options: Intl.DateTimeFormatOptions = { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "America/Sao_Paulo" };
+  const startLabel = new Date(start).toLocaleDateString("pt-BR", options);
+  const inclusiveEnd = new Date(new Date(end).getTime() - 1);
+  const endLabel = inclusiveEnd.toLocaleDateString("pt-BR", options);
+  return `${startLabel} até ${endLabel}`;
+}
 
 function browserMonth(): string {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -34,6 +55,7 @@ export default function App() {
   const [lastOrder, setLastOrder] = useState<NewOrderEvent | null>(null);
   const [pulseKey, setPulseKey] = useState(0);
   const [notice, setNotice] = useState("");
+  const clock = useClock(60_000);
 
   const loadDashboard = useCallback(async (selectedMonth = month) => {
     const data = await api.dashboard(selectedMonth);
@@ -189,7 +211,7 @@ export default function App() {
                     <div>
                       <span className="eyebrow">VISÃO MENSAL</span>
                       <h2>{monthLabel}</h2>
-                      <p>Contagem sincronizada com a Tray, progresso da meta e projeção do fechamento.</p>
+                      <p>Período {formatDashboardPeriod(dashboard.period.start, dashboard.period.end)}, status monitorados <strong>{dashboard.trackedStatus}</strong>.</p>
                     </div>
                     <div className="sync-pill">
                       <span className="system-status__dot" />
@@ -200,10 +222,12 @@ export default function App() {
                   </section>
 
                   <section className="metrics-grid">
-                    <MetricCard label="Pedidos no mês" value={dashboard.summary.orders} description="Pedidos recebidos no período" icon={ShoppingBag} tone="blue" />
+                    <MetricCard label="Pedidos no mês" value={dashboard.summary.orders} description={`Status: ${dashboard.trackedStatus}`} icon={ShoppingBag} tone="blue" />
                     <MetricCard label="Meta do mês" value={dashboard.summary.goal} description="Definida pelo administrador" icon={Target} tone="purple" />
-                    <MetricCard label="Progresso da meta" value={dashboard.summary.progress} suffix="%" decimals={1} description={`${dashboard.summary.remaining.toLocaleString("pt-BR")} pedidos restantes`} icon={TrendingUp} tone="green" />
-                    <MetricCard label="Média diária" value={dashboard.summary.dailyAverage} decimals={1} description="Pedidos por dia corrido" icon={CalendarDays} tone="amber" />
+                    <MetricCard label="Faltam para a meta" value={dashboard.summary.remaining} description="Pedidos necessários para concluir" icon={Gauge} tone="red" />
+                    <MetricCard label="Meta atingida" value={dashboard.summary.progress} suffix="%" decimals={1} description="Percentual alcançado no mês" icon={Percent} tone="green" />
+                    <MetricCard label="Ritmo necessário" value={dashboard.summary.requiredDaily} suffix="/dia" description={`${dashboard.summary.remainingDaysIncludingToday} dias contando hoje`} icon={CalendarDays} tone="amber" />
+                    <MetricCard label="Tempo restante" value={formatRemainingTime(dashboard.summary.monthEndsAt, clock)} description={`${dashboard.summary.daysRemaining} dias completos após hoje`} icon={Clock3} tone="cyan" />
                   </section>
 
                   <section className="dashboard-grid">

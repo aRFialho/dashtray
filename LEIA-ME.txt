@@ -1,0 +1,17 @@
+ATUALIZAÇÃO PARA MÚLTIPLOS STATUS
+
+1. Extraia este ZIP na raiz do projeto e substitua os arquivos existentes.
+2. No .env, use status separados por vírgula, sem aspas:
+
+STATUS=A ENVIAR,ENVIADO,FINALIZADO
+
+3. Reinicie o projeto:
+
+Ctrl + C
+npm run dev
+
+4. Faça uma sincronização manual no painel.
+
+Não é necessária migration.
+A API da Tray é consultada uma vez por status e os pedidos são consolidados por ID.
+O webhook consulta o pedido individualmente e aceita qualquer status configurado.

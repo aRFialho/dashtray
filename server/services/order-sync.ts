@@ -1,6 +1,16 @@
 import type { TrayStore } from "@prisma/client";
+import { env } from "../config/env";
 import { prisma } from "../db";
-import { currentMonth, parseMonthKey, parseTrayDate, parseTrayDateTime, trayMonthRange } from "../utils/date";
+import {
+  currentMonth,
+  liveMonthRangeUtc,
+  monthRangeUtc,
+  parseMonthKey,
+  parseTrayDate,
+  parseTrayDateTime,
+  trayLiveMonthRange,
+  trayMonthRange
+} from "../utils/date";
 import { buildDashboardData } from "./dashboard";
 import { emitDashboardUpdate, emitNewOrder } from "./realtime";
 import { trayRequest } from "./tray-client";
@@ -44,8 +54,21 @@ function normalizeStatus(order: TrayOrder): string {
   return String(order.status || order.OrderStatus?.status || "SEM STATUS").trim().toUpperCase();
 }
 
+function isTrackedStatus(order: TrayOrder): boolean {
+  return env.trackedStatuses.includes(normalizeStatus(order));
+}
+
 function normalizeWebhookAction(action: string): string {
   return action.trim().toLowerCase().replace(/^order_/, "");
+}
+
+function orderDate(order: TrayOrder): Date {
+  return parseTrayDate(order.date, order.hour, env.APP_TIMEZONE);
+}
+
+function isInsideRange(order: TrayOrder, start: Date, end: Date): boolean {
+  const date = orderDate(order);
+  return date >= start && date < end;
 }
 
 async function inBatches<T>(items: T[], size: number, worker: (item: T) => Promise<void>): Promise<void> {
@@ -70,8 +93,8 @@ export async function upsertTrayOrder(store: TrayStore, order: TrayOrder, detect
 
   const numericTotal = Number(order.total || 0);
   const data = {
-    orderDate: parseTrayDate(order.date, order.hour),
-    modifiedAt: parseTrayDateTime(order.modified),
+    orderDate: orderDate(order),
+    modifiedAt: parseTrayDateTime(order.modified, env.APP_TIMEZONE),
     status: normalizeStatus(order),
     statusType: order.OrderStatus?.type ? String(order.OrderStatus.type) : null,
     total: Number.isFinite(numericTotal) ? numericTotal : 0,
@@ -99,25 +122,49 @@ export async function upsertTrayOrder(store: TrayStore, order: TrayOrder, detect
   return { saved, isNew: detectNew && !existing };
 }
 
+async function removeOrderAndRefresh(store: TrayStore, orderId: string, reason: string) {
+  const removed = await prisma.order.deleteMany({
+    where: { storeRecordId: store.id, trayOrderId: orderId }
+  });
+
+  await prisma.trayStore.update({ where: { id: store.id }, data: { lastSyncAt: new Date() } });
+
+  if (removed.count > 0) {
+    const dashboard = await buildDashboardData(currentMonth(env.APP_TIMEZONE), store.id);
+    emitDashboardUpdate(dashboard);
+  }
+
+  return { ignored: true, removed: removed.count, reason };
+}
+
 export async function syncOrderById(store: TrayStore, orderId: string, rawAction = "update") {
   const action = normalizeWebhookAction(rawAction);
 
   if (action === "delete") {
-    await prisma.order.deleteMany({
-      where: { storeRecordId: store.id, trayOrderId: orderId }
-    });
-    const dashboard = await buildDashboardData(currentMonth(), store.id);
-    emitDashboardUpdate(dashboard);
-    return { deleted: true };
+    return removeOrderAndRefresh(store, orderId, "Pedido excluído na Tray.");
   }
 
   const response = await trayRequest<TrayOrderResponse>(store, `/orders/${encodeURIComponent(orderId)}/complete`);
   if (!response.Order) throw new Error(`Pedido ${orderId} não retornado pela Tray.`);
 
+  const liveRange = liveMonthRangeUtc(env.APP_TIMEZONE);
+
+  if (!isTrackedStatus(response.Order)) {
+    return removeOrderAndRefresh(
+      store,
+      orderId,
+      `Status ${normalizeStatus(response.Order)} não está entre os monitorados: ${env.trackedStatus}.`
+    );
+  }
+
+  if (!isInsideRange(response.Order, liveRange.start, liveRange.end)) {
+    return removeOrderAndRefresh(store, orderId, "Pedido fora do período ao vivo do mês atual.");
+  }
+
   const result = await upsertTrayOrder(store, response.Order, true);
   await prisma.trayStore.update({ where: { id: store.id }, data: { lastSyncAt: new Date() } });
 
-  const dashboard = await buildDashboardData(currentMonth(), store.id);
+  const dashboard = await buildDashboardData(currentMonth(env.APP_TIMEZONE), store.id);
   emitDashboardUpdate(dashboard);
 
   if (result.isNew) {
@@ -132,59 +179,102 @@ export async function syncOrderById(store: TrayStore, orderId: string, rawAction
   return result;
 }
 
-export async function syncMonth(store: TrayStore, month = currentMonth()) {
+export async function syncMonth(store: TrayStore, month = currentMonth(env.APP_TIMEZONE)) {
   const parts = parseMonthKey(month);
-  const range = trayMonthRange(parts);
+  const isCurrent = month === currentMonth(env.APP_TIMEZONE);
+  const apiRange = isCurrent
+    ? trayLiveMonthRange(env.APP_TIMEZONE)
+    : (() => {
+        const range = trayMonthRange(parts);
+        return { ...range, endDate: `${range.endDate} 23:59:59` };
+      })();
+  const fullMonthRange = monthRangeUtc(parts, env.APP_TIMEZONE);
+  const databaseRange = isCurrent
+    ? liveMonthRangeUtc(env.APP_TIMEZONE)
+    : { ...fullMonthRange, monthEnd: fullMonthRange.end };
+  const syncStartedAt = new Date();
   const log = await prisma.syncLog.create({
-    data: { storeRecordId: store.id, kind: `month:${month}`, status: "running" }
+    data: { storeRecordId: store.id, kind: `month:${month}:status:${env.trackedStatus}`, status: "running" }
   });
 
-  let page = 1;
   let pages = 0;
   let items = 0;
+  const syncedOrderIds = new Set<string>();
 
   try {
-    while (page <= MAX_MONTH_PAGES) {
-      const response = await trayRequest<TrayOrdersResponse>(store, "/orders", {
-        date: `${range.startDate},${range.endDate}`,
-        limit: 50,
-        page,
-        sort: "id_asc"
-      });
+    // A API documenta o filtro status como String. Para múltiplos status,
+    // consultamos um por vez e consolidamos os pedidos no banco.
+    for (const trackedStatus of env.trackedStatuses) {
+      let page = 1;
 
-      const pageOrders = (response.Orders ?? [])
-        .map((wrapper) => wrapper.Order)
-        .filter((order): order is TrayOrder => order?.id !== undefined);
+      while (page <= MAX_MONTH_PAGES) {
+        const response = await trayRequest<TrayOrdersResponse>(store, "/orders", {
+          status: trackedStatus,
+          date: `${apiRange.startDate},${apiRange.endDate}`,
+          limit: 50,
+          page,
+          sort: "id_asc"
+        });
 
-      await inBatches(pageOrders, UPSERT_CONCURRENCY, async (order) => {
-        await upsertTrayOrder(store, order, false);
-      });
-      items += pageOrders.length;
-      pages += 1;
+        const pageOrders = (response.Orders ?? [])
+          .map((wrapper) => wrapper.Order)
+          .filter((order): order is TrayOrder => order?.id !== undefined)
+          // Filtros defensivos caso uma loja ou versão da API ignore algum parâmetro.
+          .filter((order) => isTrackedStatus(order))
+          .filter((order) => isInsideRange(order, databaseRange.start, databaseRange.end));
 
-      const total = Number(response.paging?.total ?? 0);
-      const limit = Math.max(1, Number(response.paging?.limit ?? 50));
-      const expectedPages = Math.max(1, Math.ceil(total / limit));
+        await inBatches(pageOrders, UPSERT_CONCURRENCY, async (order) => {
+          syncedOrderIds.add(String(order.id));
+          await upsertTrayOrder(store, order, false);
+        });
+        pages += 1;
 
-      if (expectedPages > MAX_MONTH_PAGES) {
-        throw new Error(`O mês possui ${expectedPages} páginas, acima do limite de segurança de ${MAX_MONTH_PAGES}.`);
+        const total = Number(response.paging?.total ?? 0);
+        const limit = Math.max(1, Number(response.paging?.limit ?? 50));
+        const expectedPages = Math.max(1, Math.ceil(total / limit));
+
+        if (expectedPages > MAX_MONTH_PAGES) {
+          throw new Error(
+            `O status ${trackedStatus} possui ${expectedPages} páginas, acima do limite de segurança de ${MAX_MONTH_PAGES}.`
+          );
+        }
+
+        if ((response.Orders ?? []).length === 0 || page >= expectedPages) break;
+        page += 1;
       }
-
-      if (pageOrders.length === 0 || page >= expectedPages) break;
-      page += 1;
     }
+
+    items = syncedOrderIds.size;
+
+    // Remove registros antigos que deixaram o STATUS monitorado ou não vieram mais na reconciliação.
+    await prisma.order.deleteMany({
+      where: {
+        storeRecordId: store.id,
+        orderDate: { gte: databaseRange.start, lt: databaseRange.end },
+        OR: [
+          { status: { notIn: env.trackedStatuses, mode: "insensitive" } },
+          { updatedAt: { lt: syncStartedAt } }
+        ]
+      }
+    });
 
     await Promise.all([
       prisma.trayStore.update({ where: { id: store.id }, data: { lastSyncAt: new Date() } }),
       prisma.syncLog.update({
         where: { id: log.id },
-        data: { status: "success", items, pages, finishedAt: new Date() }
+        data: {
+          status: "success",
+          items,
+          pages,
+          message: `Status monitorados: ${env.trackedStatus}; período ${apiRange.startDate} até ${apiRange.endDate}.`,
+          finishedAt: new Date()
+        }
       })
     ]);
 
     const dashboard = await buildDashboardData(month, store.id);
     emitDashboardUpdate(dashboard);
-    return { items, pages, dashboard };
+    return { items, pages, statuses: env.trackedStatuses, period: apiRange, dashboard };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Erro desconhecido";
     await prisma.syncLog.update({
@@ -232,16 +322,19 @@ export async function processPendingWebhookEvent(eventId: string): Promise<void>
   }
 
   try {
+    let ignoredReason: string | null = null;
+
     if (event.scopeName.toLowerCase() === "order") {
-      await syncOrderById(event.store, event.scopeId, event.action);
+      const result = await syncOrderById(event.store, event.scopeId, event.action);
+      if ("ignored" in result && result.ignored) ignoredReason = result.reason;
     }
 
     await prisma.webhookEvent.update({
       where: { id: event.id },
       data: {
-        status: "processed",
+        status: ignoredReason ? "ignored" : "processed",
         processedAt: new Date(),
-        error: null,
+        error: ignoredReason,
         nextAttemptAt: null
       }
     });
