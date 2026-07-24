@@ -111,6 +111,18 @@ function reactionMessage(amount: number): string {
     : `+${amount} no placar! Excelente sequência, equipe! 🚀`;
 }
 
+function mascotCandidates(): string[] {
+  const base = document.querySelector("base")?.getAttribute("href") ?? "/";
+  const normalized = base.endsWith("/") ? base : `${base}/`;
+
+  return [
+    `${normalized}mascot/drossi-live.gif?v=161`,
+    `${normalized}mascot/drossi-live.png?v=161`,
+    `${normalized}mascot/download.gif?v=161`,
+    `${normalized}mascot/download.png?v=161`
+  ];
+}
+
 export function LiveCoachMascot({
   data,
   increment
@@ -119,11 +131,14 @@ export function LiveCoachMascot({
   increment?: IncrementLike;
 }) {
   const messages = useMemo(() => regularMessages(data), [data]);
+  const imageCandidates = useMemo(() => mascotCandidates(), []);
   const [messageIndex, setMessageIndex] = useState(0);
   const [reaction, setReaction] = useState<string | null>(null);
-  const [imageAvailable, setImageAvailable] = useState(true);
+  const [imageIndex, setImageIndex] = useState(0);
   const amount = readIncrement(increment);
   const identity = incrementIdentity(increment);
+  const imageSource = imageCandidates[imageIndex];
+  const imageMissing = imageIndex >= imageCandidates.length;
 
   useEffect(() => {
     setMessageIndex(0);
@@ -144,8 +159,6 @@ export function LiveCoachMascot({
     return () => window.clearTimeout(timer);
   }, [identity, amount]);
 
-  if (!imageAvailable) return null;
-
   return (
     <aside className={`live-coach ${reaction ? "live-coach--reacting" : ""}`} aria-live="polite">
       <div className="live-coach__bubble" key={reaction ?? `${messageIndex}-${messages[messageIndex]}`}>
@@ -154,12 +167,20 @@ export function LiveCoachMascot({
 
       <div className="live-coach__character">
         {reaction && amount > 0 && <strong className="live-coach__increment">+{amount}</strong>}
-        <img
-          src="/mascot/drossi-live.gif"
-          alt="Personagem incentivando a equipe"
-          draggable={false}
-          onError={() => setImageAvailable(false)}
-        />
+
+        {!imageMissing && imageSource ? (
+          <img
+            src={imageSource}
+            alt="Personagem incentivando a equipe"
+            draggable={false}
+            onError={() => setImageIndex((current) => current + 1)}
+          />
+        ) : (
+          <div className="live-coach__image-warning" role="status">
+            <strong>Personagem</strong>
+            <span>Imagem não encontrada</span>
+          </div>
+        )}
       </div>
     </aside>
   );
