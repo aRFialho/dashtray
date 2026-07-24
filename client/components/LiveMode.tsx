@@ -1,7 +1,18 @@
-import { Clock3, Gauge, Minimize2, Radio, Target, Trophy } from "lucide-react";
+import {
+  Clock3,
+  Gauge,
+  Minimize2,
+  Percent,
+  Radio,
+  RefreshCw,
+  Sparkles,
+  Target,
+  TrendingUp,
+  Trophy
+} from "lucide-react";
 import { useAnimatedNumber } from "../hooks/useAnimatedNumber";
 import { useClock } from "../hooks/useClock";
-import type { DashboardData, NewOrderEvent } from "../types";
+import type { DashboardData, LiveIncrementEvent, NewOrderEvent } from "../types";
 import { Brand } from "./Brand";
 import { OrdersChart } from "./OrdersChart";
 
@@ -16,16 +27,84 @@ function formatRemainingTime(monthEndsAt: string, now: Date): string {
   return `${days}d ${hours}h ${minutes}min`;
 }
 
+function liveEncouragement(data: DashboardData): { tone: "success" | "positive" | "warning" | "boost"; title: string; text: string } {
+  const { summary, goals } = data;
+
+  if (goals.allCompleted) {
+    return {
+      tone: "success",
+      title: "Escada de metas concluída!",
+      text: `Já são ${summary.orders.toLocaleString("pt-BR")} pedidos. Agora cada novo pedido amplia o recorde do mês.`
+    };
+  }
+
+  if (summary.goal <= 0) {
+    return {
+      tone: "warning",
+      title: "Defina a próxima meta",
+      text: "Cadastre um nível de meta para liberar a projeção e o ritmo necessário do mês."
+    };
+  }
+
+  const projectedRatio = summary.projectedOrders / summary.goal;
+  const projectionDifference = summary.projectedOrders - summary.goal;
+
+  if (summary.remaining === 0) {
+    return {
+      tone: "success",
+      title: `${summary.goalLabel} conquistada!`,
+      text: goals.nextLevel
+        ? `Próximo alvo: ${goals.nextLevel.label}, com ${goals.nextLevel.targetOrders.toLocaleString("pt-BR")} pedidos.`
+        : "O último nível foi alcançado. Hora de construir um novo recorde."
+    };
+  }
+
+  if (summary.progress >= 90) {
+    return {
+      tone: "positive",
+      title: "Reta final, equipe!",
+      text: `Faltam somente ${summary.remaining.toLocaleString("pt-BR")} pedidos para conquistar ${summary.goalLabel}.`
+    };
+  }
+
+  if (projectedRatio >= 1) {
+    return {
+      tone: "positive",
+      title: "Projeção acima da meta",
+      text: `Mantendo o ritmo atual, o mês fecha cerca de ${Math.max(0, projectionDifference).toLocaleString("pt-BR")} pedidos acima do alvo.`
+    };
+  }
+
+  if (projectedRatio >= 0.9) {
+    return {
+      tone: "warning",
+      title: "A meta está ao alcance",
+      text: `Uma aceleração para ${summary.requiredDaily.toLocaleString("pt-BR")} pedidos por dia coloca ${summary.goalLabel} no placar.`
+    };
+  }
+
+  return {
+    tone: "boost",
+    title: "Hora de acelerar o ritmo",
+    text: `A projeção atual é ${summary.projectedOrders.toLocaleString("pt-BR")}. Precisamos de ${summary.requiredDaily.toLocaleString("pt-BR")} pedidos por dia para chegar à meta.`
+  };
+}
+
 export function LiveMode(props: {
   data: DashboardData;
   lastOrder: NewOrderEvent | null;
   pulseKey: number;
+  increment: LiveIncrementEvent | null;
+  refreshing: boolean;
+  notice?: string;
+  onRefresh: () => void;
   onClose: () => void;
 }) {
   const count = useAnimatedNumber(props.data.summary.orders, 1000);
   const clock = useClock();
   const progress = Math.min(100, props.data.summary.progress);
   const circumference = 2 * Math.PI * 76;
+  const encouragement = liveEncouragement(props.data);
 
   return (
     <section className={`live-mode ${props.pulseKey ? "live-mode--pulse" : ""}`} key={`live-${props.pulseKey}`}>
@@ -43,9 +122,15 @@ export function LiveMode(props: {
           <strong>{clock.toLocaleTimeString("pt-BR")}</strong>
           <span>{clock.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}</span>
         </div>
-        <button className="button button--secondary" onClick={props.onClose}>
-          <Minimize2 size={18} /> Sair da tela cheia
-        </button>
+        <div className="live-header__actions">
+          <button className="button button--secondary live-refresh-button" onClick={props.onRefresh} disabled={props.refreshing}>
+            <RefreshCw size={18} className={props.refreshing ? "spin" : ""} />
+            <span>{props.refreshing ? "Atualizando..." : "Atualizar agora"}</span>
+          </button>
+          <button className="button button--secondary" onClick={props.onClose}>
+            <Minimize2 size={18} /> <span>Sair da tela cheia</span>
+          </button>
+        </div>
       </header>
 
       <main className="live-content">
@@ -65,6 +150,11 @@ export function LiveMode(props: {
             <div className="live-ring__center">
               <span>PEDIDOS NO MÊS</span>
               <strong>{Math.round(count).toLocaleString("pt-BR")}</strong>
+              {props.increment && (
+                <em key={`counter-${props.increment.id}`} className="live-counter-increment" aria-live="polite">
+                  +{props.increment.amount.toLocaleString("pt-BR")}
+                </em>
+              )}
               <small>{props.data.summary.progress.toLocaleString("pt-BR")}% de {props.data.summary.goalLabel}</small>
             </div>
           </div>
@@ -87,6 +177,16 @@ export function LiveMode(props: {
               <strong>{props.data.summary.remaining.toLocaleString("pt-BR")}</strong>
             </div>
             <div>
+              <Percent size={21} />
+              <span>Meta atingida</span>
+              <strong>{props.data.summary.progress.toLocaleString("pt-BR")}%</strong>
+            </div>
+            <div>
+              <TrendingUp size={21} />
+              <span>Projeção do mês</span>
+              <strong>{props.data.summary.projectedOrders.toLocaleString("pt-BR")}</strong>
+            </div>
+            <div>
               <span>Ritmo necessário</span>
               <strong>{props.data.summary.requiredDaily.toLocaleString("pt-BR")}/dia</strong>
             </div>
@@ -95,6 +195,11 @@ export function LiveMode(props: {
               <span>Tempo restante</span>
               <strong className="live-targets__time">{formatRemainingTime(props.data.summary.monthEndsAt, clock)}</strong>
             </div>
+          </div>
+
+          <div className={`live-encouragement live-encouragement--${encouragement.tone}`}>
+            <Sparkles size={22} />
+            <div><strong>{encouragement.title}</strong><span>{encouragement.text}</span></div>
           </div>
         </div>
 
@@ -112,10 +217,11 @@ export function LiveMode(props: {
               </div>
             )}
           </div>
-          <OrdersChart data={props.data.chart} compact mode="daily" />
+          <OrdersChart data={props.data.chart} compact mode="daily" liveIncrement={props.increment} />
         </div>
       </main>
 
+      {props.notice && <div className="live-toast">{props.notice}</div>}
       {props.pulseKey > 0 && <div className="order-wave" />}
     </section>
   );

@@ -31,6 +31,91 @@ const connectSchema = z.object({
   adminUser: z.string().max(200).optional()
 });
 
+const webhookStatusSchema = z.enum(["all", "pending", "processing", "processed", "retry", "error", "ignored"]);
+
+async function buildWebhookManagement(status = "all") {
+  const store = await getDefaultStore();
+  const endpointUrl = `${env.APP_URL}/api/tray/webhook${
+    env.TRAY_WEBHOOK_TOKEN ? `?token=${encodeURIComponent(env.TRAY_WEBHOOK_TOKEN)}` : ""
+  }`;
+
+  if (!store) {
+    return {
+      connected: false,
+      endpointUrl,
+      tokenProtected: Boolean(env.TRAY_WEBHOOK_TOKEN),
+      activationObserved: false,
+      state: "disconnected",
+      stats: { total: 0, last24h: 0, pending: 0, processing: 0, processed: 0, retry: 0, error: 0, ignored: 0 },
+      lastReceivedAt: null,
+      events: []
+    };
+  }
+
+  const baseWhere = { storeRecordId: store.id } as const;
+  const eventWhere = status === "all"
+    ? baseWhere
+    : { ...baseWhere, status };
+  const last24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const statuses = ["pending", "processing", "processed", "retry", "error", "ignored"] as const;
+
+  const [events, total, last24h, lastEvent, lastExternalEvent] = await Promise.all([
+    prisma.webhookEvent.findMany({
+      where: eventWhere,
+      orderBy: { receivedAt: "desc" },
+      take: 50,
+      select: {
+        id: true,
+        sellerId: true,
+        scopeName: true,
+        scopeId: true,
+        action: true,
+        status: true,
+        attempts: true,
+        error: true,
+        nextAttemptAt: true,
+        lastAttemptAt: true,
+        receivedAt: true,
+        processedAt: true
+      }
+    }),
+    prisma.webhookEvent.count({ where: baseWhere }),
+    prisma.webhookEvent.count({ where: { ...baseWhere, receivedAt: { gte: last24Hours } } }),
+    prisma.webhookEvent.findFirst({
+      where: baseWhere,
+      orderBy: { receivedAt: "desc" },
+      select: { receivedAt: true, status: true }
+    }),
+    prisma.webhookEvent.findFirst({
+      where: { ...baseWhere, scopeName: { not: "diagnostic" } },
+      orderBy: { receivedAt: "desc" },
+      select: { receivedAt: true }
+    })
+  ]);
+  const statusCounts = await Promise.all(
+    statuses.map((eventStatus) => prisma.webhookEvent.count({ where: { ...baseWhere, status: eventStatus } }))
+  );
+
+  const stats = statuses.reduce<Record<string, number>>((accumulator, eventStatus, index) => {
+    accumulator[eventStatus] = statusCounts[index] ?? 0;
+    return accumulator;
+  }, { total, last24h });
+
+  const attention = (stats.error ?? 0) + (stats.retry ?? 0) > 0;
+  const state = attention ? "attention" : lastExternalEvent ? "receiving" : "waiting";
+
+  return {
+    connected: true,
+    endpointUrl,
+    tokenProtected: Boolean(env.TRAY_WEBHOOK_TOKEN),
+    activationObserved: Boolean(lastExternalEvent),
+    state,
+    stats,
+    lastReceivedAt: lastEvent?.receivedAt ?? null,
+    events
+  };
+}
+
 apiRouter.get(
   "/status",
   requireAdmin,
@@ -55,6 +140,110 @@ apiRouter.get(
         env.TRAY_WEBHOOK_TOKEN ? `?token=${encodeURIComponent(env.TRAY_WEBHOOK_TOKEN)}` : ""
       }`
     });
+  })
+);
+
+apiRouter.get(
+  "/webhooks",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const status = webhookStatusSchema.parse(typeof req.query.status === "string" ? req.query.status : "all");
+    res.json(await buildWebhookManagement(status));
+  })
+);
+
+apiRouter.post(
+  "/webhooks/test",
+  requireAdmin,
+  asyncHandler(async (_req, res) => {
+    const store = await getDefaultStore();
+    if (!store) throw new HttpError(409, "Conecte uma loja antes de testar o pipeline de webhooks.");
+
+    const now = new Date();
+    await prisma.webhookEvent.create({
+      data: {
+        storeRecordId: store.id,
+        sellerId: store.storeId,
+        scopeName: "diagnostic",
+        scopeId: String(now.getTime()),
+        action: "test",
+        fingerprint: crypto.randomBytes(32).toString("hex"),
+        payload: { source: "admin", type: "pipeline-test" },
+        status: "processed",
+        attempts: 1,
+        lastAttemptAt: now,
+        receivedAt: now,
+        processedAt: now
+      }
+    });
+
+    res.status(201).json({
+      message: "Pipeline interno registrado com sucesso.",
+      management: await buildWebhookManagement()
+    });
+  })
+);
+
+apiRouter.post(
+  "/webhooks/retry-failed",
+  requireAdmin,
+  asyncHandler(async (_req, res) => {
+    const store = await getDefaultStore();
+    if (!store) throw new HttpError(409, "Nenhuma loja conectada.");
+
+    const events = await prisma.webhookEvent.findMany({
+      where: { storeRecordId: store.id, status: { in: ["error", "retry"] } },
+      orderBy: { receivedAt: "asc" },
+      take: 50,
+      select: { id: true }
+    });
+
+    if (events.length > 0) {
+      await prisma.webhookEvent.updateMany({
+        where: { id: { in: events.map((event) => event.id) } },
+        data: { status: "pending", attempts: 0, error: null, nextAttemptAt: null, processedAt: null }
+      });
+
+      setImmediate(async () => {
+        for (const event of events) {
+          try {
+            await processPendingWebhookEvent(event.id);
+          } catch (error) {
+            console.error("Falha ao reprocessar webhook:", error instanceof Error ? error.message : error);
+          }
+        }
+      });
+    }
+
+    res.json({ queued: events.length, management: await buildWebhookManagement() });
+  })
+);
+
+apiRouter.post(
+  "/webhooks/:id/reprocess",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const store = await getDefaultStore();
+    if (!store) throw new HttpError(409, "Nenhuma loja conectada.");
+
+    const event = await prisma.webhookEvent.findFirst({
+      where: { id: req.params.id, storeRecordId: store.id },
+      select: { id: true }
+    });
+    if (!event) throw new HttpError(404, "Evento webhook não encontrado.");
+
+    await prisma.webhookEvent.update({
+      where: { id: event.id },
+      data: { status: "pending", attempts: 0, error: null, nextAttemptAt: null, processedAt: null }
+    });
+
+    setImmediate(() => {
+      processPendingWebhookEvent(event.id).catch((error) => {
+        console.error("Falha ao reprocessar webhook:", error instanceof Error ? error.message : error);
+      });
+    });
+
+    res.json({ queued: true, management: await buildWebhookManagement() });
   })
 );
 

@@ -15,14 +15,14 @@ Painel dark, moderno e responsivo para acompanhar pedidos mensais da Tray, metas
 - Renovação automática de `access_token` usando `refresh_token`.
 - Tokens criptografados no Neon com AES-256-GCM.
 - Carga do primeiro dia do mês atual até o dia atual via `GET /orders`, paginação de 50 registros e filtro por `STATUS`.
-- Webhook `order_insert`, `order_update` e `order_delete`.
+- Webhook `order_insert`, `order_update` e `order_delete`, com console administrativo de eventos, erros e retentativas.
 - Deduplicação de notificações idênticas em janelas de 30 segundos.
 - Retentativa persistente de webhooks com backoff exponencial e recuperação após reinício.
 - Fila de requisições por loja para respeitar os limites da Tray.
 - Fechamento mensal e agrupamento diário no fuso `America/Sao_Paulo`.
 - Socket.IO para atualizar o contador, gráfico e pedidos recentes sem recarregar a página.
 - Meta mensal editável, percentual atingido, faltantes, ritmo diário necessário e contagem regressiva até o fim do mês.
-- Menu lateral recolhível e modo de tela cheia com contador animado.
+- Menu lateral recolhível e modo de tela cheia com contador animado, projeção, incentivo dinâmico e atualização manual.
 - Prisma Migrate executado automaticamente no start do Render.
 - Autenticação administrativa por cookie HTTP-only.
 - Health check em `/health`.
@@ -136,7 +136,7 @@ O projeto combina três camadas:
 
 - **Carga mensal inicial:** busca todas as páginas do primeiro dia do mês atual até o dia de hoje, usando o `STATUS` configurado.
 - **Webhook:** ao receber o ID de um pedido, consulta o registro completo e só mantém no contador se a data estiver no mês atual e o status for igual a `STATUS`.
-- **Reconciliação automática:** o cron repete a sincronização do período ao vivo a cada hora por padrão e remove registros que deixaram o status monitorado.
+- **Reconciliação automática:** o cron repete a sincronização do período ao vivo a cada 3 minutos por padrão e remove registros que deixaram o status monitorado.
 
 Altere o cron com:
 
@@ -197,3 +197,24 @@ SYNC_CRON=*/3 * * * *
 ```
 
 A tela cheia mostra somente a tag animada `AO VIVO`. O gráfico desse modo exibe a quantidade de pedidos de cada dia; o dashboard administrativo mantém o gráfico acumulado versus ritmo da meta.
+
+## Tela cheia e central de webhooks
+
+A tela cheia ao vivo inclui:
+
+- Botão **Atualizar agora**, usando a mesma sincronização segura do dashboard.
+- Projeção de fechamento do mês.
+- Mensagens de incentivo que mudam conforme a projeção, a meta ativa e o ritmo necessário.
+- Gráfico de quantidade de pedidos por dia.
+- Feedback visual da sincronização sem sair do modo tela cheia.
+
+Dentro de **Integração Tray > Webhooks**, o administrador pode:
+
+- Conferir a URL pública e a proteção por token.
+- Visualizar eventos das últimas 24 horas e o histórico local.
+- Filtrar processados, pendentes, retentativas, erros e ignorados.
+- Testar o pipeline interno de armazenamento.
+- Reprocessar um evento ou reenviar até 50 falhas para a fila.
+
+A ativação, desativação ou troca da URL na infraestrutura da Tray continua sendo feita no nível do aplicativo mediante chamado. O painel gerencia somente o recebimento e o processamento local.
+

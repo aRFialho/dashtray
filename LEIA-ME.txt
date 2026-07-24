@@ -1,14 +1,24 @@
-ATUALIZAÇÃO: TODOS OS STATUS + CORREÇÃO DE TOKEN TRAY NO RENDER
+ATUALIZAÇÃO PARA MÚLTIPLOS STATUS
 
-1. Extraia este ZIP na raiz do projeto e confirme a substituição dos arquivos.
-2. No Render, configure:
-   APP_URL=https://dashtray.onrender.com
-   STATUS=*
-3. Faça commit/push para disparar um novo deploy.
-4. Após o deploy, abra https://dashtray.onrender.com e entre na aba Integração Tray.
-5. Caso a conexão apareça expirada/desconectada, autorize novamente usando o código atual da loja.
-6. Clique em Sincronizar agora.
+1. Extraia este ZIP na raiz do projeto e substitua os arquivos existentes.
+2. No .env, use status separados por vírgula, sem aspas:
 
-O sistema passará a buscar todos os pedidos, de qualquer status, do primeiro dia do mês atual até o final do dia atual. O webhook aceitará qualquer status.
+STATUS=A ENVIAR,ENVIADO,FINALIZADO
 
-Não há nova migration.
+3. Reinicie o projeto:
+
+Ctrl + C
+npm run dev
+
+4. Faça uma sincronização manual no painel.
+
+Não é necessária migration.
+A API da Tray é consultada uma vez por status e os pedidos são consolidados por ID.
+O webhook consulta o pedido individualmente e aceita qualquer status configurado.
+
+
+ATUALIZAÇÃO 1.2.0
+- Botão atualizar na tela cheia.
+- Projeção e incentivo dinâmico no modo ao vivo.
+- Subaba Webhooks em Integração Tray com histórico e reprocessamento.
+- Sem nova migration e sem novas dependências.

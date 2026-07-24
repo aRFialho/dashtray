@@ -43,5 +43,19 @@ export const api = {
     request<{ url: string }>("/api/tray/authorization-url", {
       method: "POST",
       body: JSON.stringify({ storeHost })
+    }),
+  webhooks: (status: string = "all") =>
+    request<import("./types").WebhookManagement>(`/api/tray/webhooks?status=${encodeURIComponent(status)}`),
+  testWebhookPipeline: () =>
+    request<{ message: string; management: import("./types").WebhookManagement }>("/api/tray/webhooks/test", {
+      method: "POST"
+    }),
+  retryFailedWebhooks: () =>
+    request<{ queued: number; management: import("./types").WebhookManagement }>("/api/tray/webhooks/retry-failed", {
+      method: "POST"
+    }),
+  reprocessWebhook: (id: string) =>
+    request<{ queued: boolean; management: import("./types").WebhookManagement }>(`/api/tray/webhooks/${encodeURIComponent(id)}/reprocess`, {
+      method: "POST"
     })
 };

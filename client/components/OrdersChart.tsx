@@ -10,7 +10,7 @@ import {
   XAxis,
   YAxis
 } from "recharts";
-import type { DashboardData } from "../types";
+import type { DashboardData, LiveIncrementEvent } from "../types";
 
 type ChartMode = "cumulative" | "daily";
 
@@ -24,15 +24,37 @@ const tooltipStyle = {
 export function OrdersChart({
   data,
   compact = false,
-  mode = "cumulative"
+  mode = "cumulative",
+  liveIncrement = null
 }: {
   data: DashboardData["chart"];
   compact?: boolean;
   mode?: ChartMode;
+  liveIncrement?: LiveIncrementEvent | null;
 }) {
   if (mode === "daily") {
+    const incrementIndex = liveIncrement
+      ? data.findIndex((point) => point.day === liveIncrement.day)
+      : -1;
+    const validIndex = incrementIndex >= 0 ? incrementIndex : Math.max(0, data.length - 1);
+    const horizontalPosition = data.length <= 1 ? 50 : 7 + (validIndex / (data.length - 1)) * 89;
+    const dailyValues = data.map((point) => point.dailyOrders ?? 0);
+    const currentValue = dailyValues[validIndex] ?? 0;
+    const maxValue = Math.max(1, ...dailyValues);
+    const verticalPosition = 13 + (currentValue / maxValue) * 67;
+
     return (
       <div className={`chart-shell ${compact ? "chart-shell--compact" : ""}`}>
+        {liveIncrement && (
+          <div
+            key={`chart-${liveIncrement.id}`}
+            className="chart-live-increment"
+            style={{ left: `${horizontalPosition}%`, bottom: `${verticalPosition}%` }}
+            aria-hidden="true"
+          >
+            +{liveIncrement.amount.toLocaleString("pt-BR")}
+          </div>
+        )}
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} margin={{ top: 12, right: 8, left: -18, bottom: 0 }}>
             <defs>

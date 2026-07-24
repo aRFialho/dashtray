@@ -97,6 +97,13 @@ export type NewOrderEvent = {
   occurredAt: string;
 };
 
+export type LiveIncrementEvent = {
+  id: number;
+  amount: number;
+  day: number;
+  createdAt: number;
+};
+
 export type GoalAchievementEvent = {
   id: string;
   month: string;
@@ -112,3 +119,41 @@ export type GoalAchievementEvent = {
     targetOrders: number;
   };
 };
+
+export type WebhookEventStatus = "pending" | "processing" | "processed" | "retry" | "error" | "ignored";
+
+export type WebhookEventItem = {
+  id: string;
+  sellerId: string;
+  scopeName: string;
+  scopeId: string;
+  action: string;
+  status: WebhookEventStatus;
+  attempts: number;
+  error: string | null;
+  nextAttemptAt: string | null;
+  lastAttemptAt: string | null;
+  receivedAt: string;
+  processedAt: string | null;
+};
+
+export type WebhookManagement = {
+  connected: boolean;
+  endpointUrl: string;
+  tokenProtected: boolean;
+  activationObserved: boolean;
+  state: "disconnected" | "waiting" | "receiving" | "attention";
+  stats: {
+    total: number;
+    last24h: number;
+    pending: number;
+    processing: number;
+    processed: number;
+    retry: number;
+    error: number;
+    ignored: number;
+  };
+  lastReceivedAt: string | null;
+  events: WebhookEventItem[];
+};
+

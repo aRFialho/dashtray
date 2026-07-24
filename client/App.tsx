@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CalendarDays, Clock3, Gauge, Percent, ShoppingBag, Target } from "lucide-react";
 import { io } from "socket.io-client";
 import { api } from "./api";
@@ -14,7 +14,7 @@ import { RecentOrders } from "./components/RecentOrders";
 import { Sidebar, type ViewName } from "./components/Sidebar";
 import { TrayIntegration } from "./components/TrayIntegration";
 import { useClock } from "./hooks/useClock";
-import type { DashboardData, GoalAchievementEvent, GoalLevelInput, NewOrderEvent } from "./types";
+import type { DashboardData, GoalAchievementEvent, GoalLevelInput, LiveIncrementEvent, NewOrderEvent } from "./types";
 
 
 function formatRemainingTime(monthEndsAt: string, now: Date): string {
@@ -57,12 +57,53 @@ export default function App() {
   const [pulseKey, setPulseKey] = useState(0);
   const [notice, setNotice] = useState("");
   const [celebrations, setCelebrations] = useState<GoalAchievementEvent[]>([]);
+  const [liveIncrement, setLiveIncrement] = useState<LiveIncrementEvent | null>(null);
+  const dashboardRef = useRef<DashboardData | null>(null);
+  const liveModeRef = useRef(false);
+  const incrementTimerRef = useRef<number | null>(null);
   const clock = useClock(60_000);
+
+  useEffect(() => {
+    liveModeRef.current = liveMode;
+  }, [liveMode]);
+
+  const applyDashboard = useCallback((data: DashboardData, animateIncrement = true) => {
+    const previous = dashboardRef.current;
+    const delta = previous?.month === data.month
+      ? data.summary.orders - previous.summary.orders
+      : 0;
+
+    if (animateIncrement && liveModeRef.current && delta > 0) {
+      const currentPoint = [...data.chart].reverse().find((point) => point.dailyOrders !== null);
+      const now = Date.now();
+
+      setLiveIncrement((current) => ({
+        id: now,
+        amount: current && now - current.createdAt < 900 ? current.amount + delta : delta,
+        day: currentPoint?.day ?? new Date().getDate(),
+        createdAt: now
+      }));
+      setPulseKey((key) => key + 1);
+
+      if (incrementTimerRef.current !== null) window.clearTimeout(incrementTimerRef.current);
+      incrementTimerRef.current = window.setTimeout(() => {
+        setLiveIncrement(null);
+        incrementTimerRef.current = null;
+      }, 2_600);
+    }
+
+    dashboardRef.current = data;
+    setDashboard(data);
+  }, []);
+
+  useEffect(() => () => {
+    if (incrementTimerRef.current !== null) window.clearTimeout(incrementTimerRef.current);
+  }, []);
 
   const loadDashboard = useCallback(async (selectedMonth = month) => {
     const data = await api.dashboard(selectedMonth);
-    setDashboard(data);
-  }, [month]);
+    applyDashboard(data);
+  }, [applyDashboard, month]);
 
   useEffect(() => {
     api.me()
@@ -82,11 +123,10 @@ export default function App() {
       loadDashboard(month).catch(() => undefined);
     });
     socket.on("dashboard:update", (data: DashboardData) => {
-      if (data.month === month) setDashboard(data);
+      if (data.month === month) applyDashboard(data);
     });
     socket.on("order:new", (order: NewOrderEvent) => {
       setLastOrder(order);
-      setPulseKey((key) => key + 1);
       setNotice(`Novo pedido #${order.trayOrderId} recebido.`);
     });
     socket.on("goal:achieved", (achievement: GoalAchievementEvent) => {
@@ -98,7 +138,7 @@ export default function App() {
     return () => {
       socket.disconnect();
     };
-  }, [auth.email, loadDashboard, month]);
+  }, [applyDashboard, auth.email, loadDashboard, month]);
 
   useEffect(() => {
     if (!auth.email) return;
@@ -122,7 +162,10 @@ export default function App() {
 
   useEffect(() => {
     const handleFullscreen = () => {
-      if (!document.fullscreenElement) setLiveMode(false);
+      if (!document.fullscreenElement) {
+        liveModeRef.current = false;
+        setLiveMode(false);
+      }
     };
     document.addEventListener("fullscreenchange", handleFullscreen);
     return () => document.removeEventListener("fullscreenchange", handleFullscreen);
@@ -141,6 +184,7 @@ export default function App() {
   async function logout() {
     await api.logout();
     setAuth({ loading: false, email: null });
+    dashboardRef.current = null;
     setDashboard(null);
   }
 
@@ -149,7 +193,7 @@ export default function App() {
     setNotice("");
     try {
       const result = await api.sync(month);
-      setDashboard(result.dashboard);
+      applyDashboard(result.dashboard);
       setNotice("Sincronização concluída.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Falha na sincronização.");
@@ -160,10 +204,11 @@ export default function App() {
 
   async function saveGoals(levels: GoalLevelInput[]) {
     const result = await api.saveGoals(month, levels);
-    setDashboard(result.dashboard);
+    applyDashboard(result.dashboard);
   }
 
   async function openLiveMode() {
+    liveModeRef.current = true;
     setLiveMode(true);
     try {
       await document.documentElement.requestFullscreen();
@@ -173,6 +218,7 @@ export default function App() {
   }
 
   async function closeLiveMode() {
+    liveModeRef.current = false;
     setLiveMode(false);
     if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined);
   }
@@ -190,7 +236,16 @@ export default function App() {
   if (liveMode && dashboard) {
     return (
       <>
-        <LiveMode data={dashboard} lastOrder={lastOrder} pulseKey={pulseKey} onClose={() => void closeLiveMode()} />
+        <LiveMode
+          data={dashboard}
+          lastOrder={lastOrder}
+          pulseKey={pulseKey}
+          increment={liveIncrement}
+          refreshing={syncing}
+          notice={notice}
+          onRefresh={() => void sync()}
+          onClose={() => void closeLiveMode()}
+        />
         {celebrations[0] && <CelebrationOverlay event={celebrations[0]} onClose={dismissCelebration} />}
       </>
     );
