@@ -1,0 +1,6 @@
+Coloque o GIF da personagem nesta pasta usando exatamente o nome:
+
+drossi-live.gif
+
+Caminho final:
+client/public/mascot/drossi-live.gif
