@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model TrayStore {
+  id                    String         @id @default(cuid())
+  storeId               String         @unique @map("store_id")
+  storeHost             String?        @map("store_host")
+  apiAddress            String         @map("api_address")
+  adminUser             String?        @map("admin_user")
+  accessTokenEnc        String         @map("access_token_enc")
+  refreshTokenEnc       String         @map("refresh_token_enc")
+  accessTokenExpiresAt  DateTime       @map("access_token_expires_at")
+  refreshTokenExpiresAt DateTime       @map("refresh_token_expires_at")
+  active                Boolean        @default(true)
+  installedAt           DateTime       @default(now()) @map("installed_at")
+  lastSyncAt            DateTime?      @map("last_sync_at")
+  createdAt             DateTime       @default(now()) @map("created_at")
+  updatedAt             DateTime       @updatedAt @map("updated_at")
+  orders                Order[]
+  goals                 Goal[]
+  webhookEvents         WebhookEvent[]
+  syncLogs              SyncLog[]
+
+  @@index([active])
+  @@map("tray_stores")
+}
+
+model Order {
+  id            String    @id @default(cuid())
+  storeRecordId String    @map("store_record_id")
+  trayOrderId   String    @map("tray_order_id")
+  orderDate     DateTime  @map("order_date")
+  modifiedAt    DateTime? @map("modified_at")
+  status        String
+  statusType    String?   @map("status_type")
+  total         Decimal   @default(0) @db.Decimal(14, 2)
+  pointSale     String?   @map("point_sale")
+  externalCode  String?   @map("external_code")
+  customerId    String?   @map("customer_id")
+  raw           Json?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  store         TrayStore @relation(fields: [storeRecordId], references: [id], onDelete: Cascade)
+
+  @@unique([storeRecordId, trayOrderId])
+  @@index([storeRecordId, orderDate])
+  @@index([storeRecordId, modifiedAt])
+  @@map("orders")
+}
+
+model Goal {
+  id            String    @id @default(cuid())
+  storeRecordId String    @map("store_record_id")
+  year          Int
+  month         Int
+  targetOrders  Int       @map("target_orders")
+  createdBy     String?   @map("created_by")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  store         TrayStore @relation(fields: [storeRecordId], references: [id], onDelete: Cascade)
+
+  @@unique([storeRecordId, year, month])
+  @@index([storeRecordId, year, month])
+  @@map("goals")
+}
+
+model WebhookEvent {
+  id            String     @id @default(cuid())
+  storeRecordId String?    @map("store_record_id")
+  sellerId      String     @map("seller_id")
+  scopeName     String     @map("scope_name")
+  scopeId       String     @map("scope_id")
+  action        String
+  fingerprint   String     @unique
+  payload       Json
+  status        String     @default("pending")
+  attempts      Int        @default(0)
+  error         String?
+  nextAttemptAt DateTime?   @map("next_attempt_at")
+  lastAttemptAt DateTime?   @map("last_attempt_at")
+  receivedAt    DateTime   @default(now()) @map("received_at")
+  processedAt   DateTime?  @map("processed_at")
+  store         TrayStore? @relation(fields: [storeRecordId], references: [id], onDelete: SetNull)
+
+  @@index([status, receivedAt])
+  @@index([sellerId, scopeName, scopeId])
+  @@map("webhook_events")
+}
+
+model SyncLog {
+  id            String    @id @default(cuid())
+  storeRecordId String    @map("store_record_id")
+  kind          String
+  status        String
+  items         Int       @default(0)
+  pages         Int       @default(0)
+  message       String?
+  startedAt     DateTime  @default(now()) @map("started_at")
+  finishedAt    DateTime? @map("finished_at")
+  store         TrayStore @relation(fields: [storeRecordId], references: [id], onDelete: Cascade)
+
+  @@index([storeRecordId, startedAt])
+  @@map("sync_logs")
+}

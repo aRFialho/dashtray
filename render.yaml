@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: volt-tray-dashboard
+    runtime: node
+    plan: free
+    buildCommand: bash scripts/render-build.sh
+    startCommand: bash scripts/render-start.sh
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: NODE_ENV
+        value: production
+      - key: APP_TIMEZONE
+        value: America/Sao_Paulo
+      - key: SYNC_CRON
+        value: "0 * * * *"
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: TRAY_CONSUMER_KEY
+        sync: false
+      - key: TRAY_CONSUMER_SECRET
+        sync: false
+      - key: TRAY_WEBHOOK_TOKEN
+        generateValue: true
+      - key: TRAY_ALLOWED_HOSTNAMES
+        value: www.drossiinteriores.com.br,drossiinteriores.com.br,*.commercesuite.com.br,*.tray.com.br
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD_HASH
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: TOKEN_ENCRYPTION_KEY
+        sync: false
