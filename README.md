@@ -211,3 +211,11 @@ Dentro de **Integração Tray > Webhooks**, o administrador pode:
 
 A ativação, desativação ou troca da URL na infraestrutura da Tray continua sendo feita no nível do aplicativo mediante chamado. O painel gerencia somente o recebimento e o processamento local.
 
+
+## Live Coach v1.6.2
+
+A personagem motivacional aparece somente na tela cheia e usa o GIF em `client/public/mascot/drossi-live.gif`. Ela alterna mensagens conforme meta e projeção e reage ao incremento real de novos pedidos. O GIF foi otimizado para reduzir o tempo de carregamento.
+
+## Renovação automática de tokens
+
+A versão 1.7.0 relê os tokens no Neon antes de cada chamada e usa atualização otimista para impedir que páginas, webhooks ou instâncias concorrentes reutilizem um `refresh_token` já rotacionado. Logs de renovação não exibem os tokens.

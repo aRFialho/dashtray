@@ -131,7 +131,8 @@ apiRouter.get(
             active: store.active,
             installedAt: store.installedAt,
             lastSyncAt: store.lastSyncAt,
-            tokenExpiresAt: store.accessTokenExpiresAt
+            tokenExpiresAt: store.accessTokenExpiresAt,
+            refreshTokenExpiresAt: store.refreshTokenExpiresAt
           }
         : null,
       callbackUrl: `${env.APP_URL}/tray/callback`,

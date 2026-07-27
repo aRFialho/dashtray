@@ -3,10 +3,12 @@ import { env } from "../config/env";
 import { prisma } from "../db";
 import { automaticSyncPhase, currentMonth, isAutomaticSyncWindow, todayRangeUtc } from "../utils/date";
 import { processPendingWebhookEvent, syncMonth, syncToday, type SyncScope } from "./order-sync";
+import { recoverInactiveTrayStores } from "./tray-client";
 
 const runningStores = new Set<string>();
 
 const AUTOMATIC_SCHEDULES = {
+  tokenRecovery: "37 7 * * 1-5",
   opening: "42 7 * * 1-5",
   morning: "45-59/3 7 * * 1-5",
   intraday: "*/3 8-17 * * 1-5",
@@ -127,6 +129,10 @@ export function startScheduler(): void {
     `[sync:auto] seg-sex · reconciliação mensal 07:42 e 18:00 · pedidos de hoje a cada 3 minutos · fuso ${env.APP_TIMEZONE}.`
   );
 
+  cron.schedule(AUTOMATIC_SCHEDULES.tokenRecovery, () => {
+    void recoverInactiveTrayStores();
+  }, { timezone: env.APP_TIMEZONE });
+
   cron.schedule(AUTOMATIC_SCHEDULES.opening, () => {
     void syncActiveStores("month", "opening");
   }, { timezone: env.APP_TIMEZONE });
@@ -149,6 +155,12 @@ export function startScheduler(): void {
 
   setTimeout(() => {
     void retryPendingWebhooks();
-    void startupSync();
+    void recoverInactiveTrayStores()
+      .catch((error) => {
+        console.error("Falha ao verificar autorizações Tray inativas:", error instanceof Error ? error.message : error);
+      })
+      .finally(() => {
+        void startupSync();
+      });
   }, 5_000).unref();
 }

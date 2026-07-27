@@ -29,6 +29,8 @@ const requestQueues = new Map<string, Promise<void>>();
 const nextRequestAt = new Map<string, number>();
 const TRAY_REQUEST_INTERVAL_MS = 350;
 const MAX_TRANSIENT_RETRIES = 3;
+const ACCESS_REFRESH_LEEWAY_MS = 10 * 60 * 1000;
+const REFRESH_RECOVERY_DELAYS_MS = [200, 600, 1_500, 3_000];
 
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -96,10 +98,14 @@ function isUnauthorizedPayload(payload: TrayErrorPayload | null): boolean {
   return (
     code === 401 ||
     code === 403 ||
+    code === 1000 ||
     message.includes("unauthorized access") ||
     message.includes("invalid or expired token") ||
+    message.includes("invalid token") ||
+    message.includes("expired token") ||
     message.includes("token expirado") ||
-    message.includes("token inválido")
+    message.includes("token inválido") ||
+    message.includes("token invalido")
   );
 }
 
@@ -119,7 +125,16 @@ function isUnauthorizedError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   if (error instanceof HttpError && (error.status === 401 || error.status === 403)) return true;
   const message = error.message.toLowerCase();
-  return message.includes("unauthorized access") || message.includes("invalid or expired token");
+  return (
+    message.includes("unauthorized access") ||
+    message.includes("invalid or expired token") ||
+    message.includes("invalid token") ||
+    message.includes("expired token") ||
+    message.includes("token expirado") ||
+    message.includes("token inválido") ||
+    message.includes("token invalido") ||
+    (message.includes("refresh") && (message.includes("invalid") || message.includes("expired")))
+  );
 }
 
 async function parseTrayResponse<T>(response: Response): Promise<T> {
@@ -142,6 +157,63 @@ async function parseTrayResponse<T>(response: Response): Promise<T> {
   }
 
   return payload as T;
+}
+
+function assertTokenResponse(payload: TrayTokenResponse): TrayTokenResponse {
+  const required: Array<keyof TrayTokenResponse> = [
+    "access_token",
+    "refresh_token",
+    "date_expiration_access_token",
+    "date_expiration_refresh_token",
+    "api_host",
+    "store_id"
+  ];
+
+  for (const field of required) {
+    const value = payload?.[field];
+    if (value === undefined || value === null || String(value).trim() === "") {
+      throw new HttpError(502, `A Tray não retornou o campo obrigatório ${field} ao gerar/renovar os tokens.`);
+    }
+  }
+
+  return payload;
+}
+
+async function loadStore(storeId: string): Promise<TrayStore> {
+  const store = await prisma.trayStore.findUnique({ where: { id: storeId } });
+  if (!store) throw new HttpError(404, "A loja conectada não foi encontrada no banco de dados.");
+  return store;
+}
+
+function tokenMaterialChanged(reference: TrayStore, current: TrayStore): boolean {
+  return (
+    reference.accessTokenEnc !== current.accessTokenEnc ||
+    reference.refreshTokenEnc !== current.refreshTokenEnc ||
+    reference.accessTokenExpiresAt.getTime() !== current.accessTokenExpiresAt.getTime() ||
+    reference.refreshTokenExpiresAt.getTime() !== current.refreshTokenExpiresAt.getTime()
+  );
+}
+
+function accessTokenIsUsable(store: TrayStore, leewayMs = ACCESS_REFRESH_LEEWAY_MS): boolean {
+  return store.accessTokenExpiresAt.getTime() > Date.now() + leewayMs;
+}
+
+async function recoverRefreshCompletedElsewhere(
+  reference: TrayStore,
+  includeInitialRead = true
+): Promise<TrayStore | null> {
+  const delays = includeInitialRead ? [0, ...REFRESH_RECOVERY_DELAYS_MS] : REFRESH_RECOVERY_DELAYS_MS;
+
+  for (const delay of delays) {
+    if (delay > 0) await sleep(delay);
+    const current = await loadStore(reference.id);
+    if (tokenMaterialChanged(reference, current) && current.accessTokenExpiresAt.getTime() > Date.now() + 30_000) {
+      console.info(`[tray:token] renovação concorrente recuperada para a loja ${current.storeId}.`);
+      return current;
+    }
+  }
+
+  return null;
 }
 
 export async function exchangeAuthorizationCode(input: {
@@ -168,7 +240,7 @@ export async function exchangeAuthorizationCode(input: {
     signal: AbortSignal.timeout(20_000)
   });
 
-  const tokenData = await parseTrayResponse<TrayTokenResponse>(response);
+  const tokenData = assertTokenResponse(await parseTrayResponse<TrayTokenResponse>(response));
   const storeId = String(tokenData.store_id);
 
   return prisma.trayStore.upsert({
@@ -197,56 +269,115 @@ export async function exchangeAuthorizationCode(input: {
   });
 }
 
-async function refreshStoreToken(store: TrayStore): Promise<TrayStore> {
-  const existing = refreshLocks.get(store.id);
+async function refreshStoreToken(inputStore: TrayStore, forceRefresh: boolean): Promise<TrayStore> {
+  const existing = refreshLocks.get(inputStore.id);
   if (existing) return existing;
 
   const task = (async () => {
-    const refreshToken = decryptSecret(store.refreshTokenEnc);
-    const url = new URL(`${normalizeApiAddress(store.apiAddress)}/auth`);
+    const current = await loadStore(inputStore.id);
+
+    // Outro request ou outra instância já pode ter renovado enquanto este request aguardava.
+    if (tokenMaterialChanged(inputStore, current) && current.accessTokenExpiresAt.getTime() > Date.now() + 30_000) {
+      return current;
+    }
+
+    if (!forceRefresh && accessTokenIsUsable(current)) return current;
+
+    if (current.refreshTokenExpiresAt.getTime() <= Date.now()) {
+      throw new HttpError(401, "O refresh_token da Tray expirou. Reautorize o aplicativo.");
+    }
+
+    const attemptedStore = current;
+    const refreshToken = decryptSecret(attemptedStore.refreshTokenEnc);
+    const url = new URL(`${normalizeApiAddress(attemptedStore.apiAddress)}/auth`);
     url.searchParams.set("refresh_token", refreshToken);
 
-    const response = await fetch(url, {
-      method: "GET",
-      signal: AbortSignal.timeout(20_000)
-    });
-    const tokenData = await parseTrayResponse<TrayTokenResponse>(response);
-
-    return prisma.trayStore.update({
-      where: { id: store.id },
-      data: {
-        apiAddress: normalizeApiAddress(tokenData.api_host || store.apiAddress),
-        accessTokenEnc: encryptSecret(tokenData.access_token),
-        refreshTokenEnc: encryptSecret(tokenData.refresh_token),
-        accessTokenExpiresAt: parseTrayTokenDate(tokenData.date_expiration_access_token),
-        refreshTokenExpiresAt: parseTrayTokenDate(tokenData.date_expiration_refresh_token),
-        active: true
+    let tokenData: TrayTokenResponse;
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { accept: "application/json" },
+        signal: AbortSignal.timeout(20_000)
+      });
+      tokenData = assertTokenResponse(await parseTrayResponse<TrayTokenResponse>(response));
+    } catch (error) {
+      // Em múltiplas instâncias, uma delas pode ter consumido/rotacionado o refresh_token.
+      // Antes de declarar a loja desconectada, verificamos se o Neon já recebeu tokens novos.
+      if (isUnauthorizedError(error)) {
+        const recovered = await recoverRefreshCompletedElsewhere(attemptedStore);
+        if (recovered) return recovered;
       }
+      throw error;
+    }
+
+    const nextData = {
+      apiAddress: normalizeApiAddress(tokenData.api_host || attemptedStore.apiAddress),
+      accessTokenEnc: encryptSecret(tokenData.access_token),
+      refreshTokenEnc: encryptSecret(tokenData.refresh_token),
+      accessTokenExpiresAt: parseTrayTokenDate(tokenData.date_expiration_access_token),
+      refreshTokenExpiresAt: parseTrayTokenDate(tokenData.date_expiration_refresh_token),
+      active: true
+    };
+
+    // Atualização otimista: somente quem ainda possui o refresh_token usado pode gravar.
+    // Evita que uma resposta concorrente sobrescreva tokens mais recentes no Neon.
+    const updated = await prisma.trayStore.updateMany({
+      where: { id: attemptedStore.id, refreshTokenEnc: attemptedStore.refreshTokenEnc },
+      data: nextData
     });
+
+    if (updated.count === 0) {
+      const recovered = await recoverRefreshCompletedElsewhere(attemptedStore);
+      if (recovered) return recovered;
+      throw new HttpError(409, "Os tokens da Tray foram alterados durante a renovação. Tente novamente.");
+    }
+
+    const saved = await loadStore(attemptedStore.id);
+    console.info(
+      `[tray:token] renovado automaticamente para a loja ${saved.storeId}; access até ${saved.accessTokenExpiresAt.toISOString()}; refresh até ${saved.refreshTokenExpiresAt.toISOString()}.`
+    );
+    return saved;
   })();
 
-  refreshLocks.set(store.id, task);
+  refreshLocks.set(inputStore.id, task);
   try {
     return await task;
   } finally {
-    refreshLocks.delete(store.id);
+    if (refreshLocks.get(inputStore.id) === task) refreshLocks.delete(inputStore.id);
   }
 }
 
-export async function getValidStore(store: TrayStore, forceRefresh = false): Promise<TrayStore> {
-  const refreshThreshold = Date.now() + 5 * 60 * 1000;
-  if (!forceRefresh && store.accessTokenExpiresAt.getTime() > refreshThreshold) return store;
+export async function getValidStore(inputStore: TrayStore, forceRefresh = false): Promise<TrayStore> {
+  const current = await loadStore(inputStore.id);
 
-  if (store.refreshTokenExpiresAt.getTime() <= Date.now()) {
-    await prisma.trayStore.update({ where: { id: store.id }, data: { active: false } });
+  // Nunca confie no objeto recebido pela sincronização: ele pode ter sido carregado antes
+  // de outra página, webhook ou instância renovar os tokens.
+  if (tokenMaterialChanged(inputStore, current) && current.accessTokenExpiresAt.getTime() > Date.now() + 30_000) {
+    return current;
+  }
+
+  if (!forceRefresh && accessTokenIsUsable(current)) return current;
+
+  if (current.refreshTokenExpiresAt.getTime() <= Date.now()) {
+    await prisma.trayStore.updateMany({
+      where: { id: current.id, refreshTokenEnc: current.refreshTokenEnc },
+      data: { active: false }
+    });
     throw new HttpError(401, "O refresh_token da Tray expirou. Reautorize o aplicativo.");
   }
 
   try {
-    return await refreshStoreToken(store);
+    return await refreshStoreToken(current, forceRefresh);
   } catch (error) {
     if (isUnauthorizedError(error)) {
-      await prisma.trayStore.update({ where: { id: store.id }, data: { active: false } });
+      const recovered = await recoverRefreshCompletedElsewhere(current, false);
+      if (recovered) return recovered;
+
+      // Só desativa se ninguém substituiu o token que efetivamente falhou.
+      await prisma.trayStore.updateMany({
+        where: { id: current.id, refreshTokenEnc: current.refreshTokenEnc },
+        data: { active: false }
+      });
       throw new HttpError(
         401,
         "A autorização da Tray expirou ou foi revogada. Conecte novamente a loja na aba Integração Tray."
@@ -292,6 +423,35 @@ export async function trayRequest<T>(
   }
 
   return parseTrayResponse<T>(response);
+}
+
+export async function recoverInactiveTrayStores(): Promise<number> {
+  const candidates = await prisma.trayStore.findMany({
+    where: {
+      active: false,
+      refreshTokenExpiresAt: { gt: new Date() }
+    },
+    orderBy: { updatedAt: "desc" },
+    take: 10
+  });
+
+  let recoveredCount = 0;
+  for (const candidate of candidates) {
+    try {
+      const recovered = await refreshStoreToken(candidate, true);
+      if (recovered.active) {
+        recoveredCount += 1;
+        console.info(`[tray:token] autorização reativada automaticamente para a loja ${recovered.storeId}.`);
+      }
+    } catch (error) {
+      console.warn(
+        `[tray:token] não foi possível reativar a loja ${candidate.storeId}:`,
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
+  return recoveredCount;
 }
 
 export function buildTrayAuthorizationUrl(input: { storeHost: string; callbackUrl: string }): string {
