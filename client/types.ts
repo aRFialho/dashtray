@@ -37,6 +37,12 @@ export type DashboardData = {
     dailyAverage: number;
     projectedOrders: number;
     requiredDaily: number;
+    dailyGoal: number;
+    todayOrders: number;
+    dailyGoalProgress: number;
+    dailyGoalRemaining: number;
+    dailyGoalAchieved: boolean;
+    dailyGoalDate: string | null;
     daysRemaining: number;
     remainingDaysIncludingToday: number;
     monthEndsAt: string;
@@ -111,11 +117,24 @@ export type LiveCountUpdate = {
   delta: number;
   day: number;
   dailyOrders: number;
+  goal: number;
+  goalLabel: string;
+  progress: number;
+  remaining: number;
+  projectedOrders: number;
+  requiredDaily: number;
+  dailyGoal: number;
+  todayOrders: number;
+  dailyGoalProgress: number;
+  dailyGoalRemaining: number;
+  dailyGoalAchieved: boolean;
+  dailyGoalDate: string | null;
   syncedAt: string;
   source: "scheduler" | "browser" | "manual" | "webhook" | "initial";
 };
 
-export type GoalAchievementEvent = {
+export type MonthlyGoalAchievementEvent = {
+  type: "monthly";
   id: string;
   month: string;
   levelId: string;
@@ -130,6 +149,22 @@ export type GoalAchievementEvent = {
     targetOrders: number;
   };
 };
+
+export type DailyGoalAchievementEvent = {
+  type: "daily";
+  id: string;
+  month: string;
+  date: string;
+  levelId: string;
+  goalLabel: string;
+  monthlyTarget: number;
+  label: string;
+  targetOrders: number;
+  orderCount: number;
+  achievedAt: string;
+};
+
+export type GoalAchievementEvent = MonthlyGoalAchievementEvent | DailyGoalAchievementEvent;
 
 export type WebhookEventStatus = "pending" | "processing" | "processed" | "retry" | "error" | "ignored";
 

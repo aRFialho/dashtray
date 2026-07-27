@@ -3,8 +3,9 @@ import { z } from "zod";
 import { prisma } from "../db";
 import { requireAdmin } from "../middleware/auth";
 import { buildDashboardData, getDefaultStore } from "../services/dashboard";
+import { evaluateDailyGoalAchievement } from "../services/daily-goal-progress";
 import { evaluateGoalAchievements } from "../services/goal-progress";
-import { emitDashboardUpdate } from "../services/realtime";
+import { emitDashboardUpdate, emitGoalAchieved } from "../services/realtime";
 import { asyncHandler } from "../utils/async-handler";
 import { HttpError } from "../utils/http-error";
 import { parseMonthKey } from "../utils/date";
@@ -110,9 +111,12 @@ router.put(
     });
 
     const beforeEvaluation = await buildDashboardData(month, store.id);
-    await evaluateGoalAchievements(store.id, month, beforeEvaluation.summary.orders);
+    const dailyAchievement = await evaluateDailyGoalAchievement(store.id, month, beforeEvaluation);
+    const monthlyAchievements = await evaluateGoalAchievements(store.id, month, beforeEvaluation.summary.orders);
     const dashboard = await buildDashboardData(month, store.id);
     emitDashboardUpdate(dashboard);
+    monthlyAchievements.forEach(emitGoalAchieved);
+    if (dailyAchievement) emitGoalAchieved(dailyAchievement);
     res.json({ dashboard });
   })
 );

@@ -128,7 +128,19 @@ export default function App() {
       store: current.store ? { ...current.store, lastSyncAt: update.syncedAt } : null,
       summary: {
         ...current.summary,
-        orders: update.orders
+        orders: update.orders,
+        goal: update.goal,
+        goalLabel: update.goalLabel,
+        progress: update.progress,
+        remaining: update.remaining,
+        projectedOrders: update.projectedOrders,
+        requiredDaily: update.requiredDaily,
+        dailyGoal: update.dailyGoal,
+        todayOrders: update.todayOrders,
+        dailyGoalProgress: update.dailyGoalProgress,
+        dailyGoalRemaining: update.dailyGoalRemaining,
+        dailyGoalAchieved: update.dailyGoalAchieved,
+        dailyGoalDate: update.dailyGoalDate
       },
       chart: current.chart.map((point) => point.day === update.day
         ? { ...point, orders: update.orders, dailyOrders: update.dailyOrders }
@@ -189,7 +201,9 @@ export default function App() {
       setCelebrations((current) => current.some((item) => item.id === achievement.id)
         ? current
         : [...current, achievement]);
-      setNotice(`Meta atingida: ${achievement.label}!`);
+      setNotice(achievement.type === "daily"
+        ? `Meta diária atingida: ${achievement.targetOrders} pedidos!`
+        : `Meta atingida: ${achievement.label}!`);
     });
     return () => {
       socket.disconnect();
@@ -378,7 +392,18 @@ export default function App() {
                     <MetricCard label="Meta atual" value={dashboard.summary.goal} description={dashboard.summary.goalLabel} icon={Target} tone="purple" />
                     <MetricCard label="Faltam para a meta" value={dashboard.summary.remaining} description="Pedidos necessários para concluir" icon={Gauge} tone="red" />
                     <MetricCard label="Meta atingida" value={dashboard.summary.progress} suffix="%" decimals={1} description="Percentual alcançado no mês" icon={Percent} tone="green" />
-                    <MetricCard label="Ritmo necessário" value={dashboard.summary.requiredDaily} suffix="/dia" description={`${dashboard.summary.remainingDaysIncludingToday} dias contando hoje`} icon={CalendarDays} tone="amber" />
+                    <MetricCard
+                      label="Meta diária automática"
+                      value={dashboard.summary.dailyGoal > 0 ? dashboard.summary.dailyGoal : "—"}
+                      suffix={dashboard.summary.dailyGoal > 0 ? " pedidos" : undefined}
+                      description={dashboard.goals.allCompleted
+                        ? "Todas as metas mensais concluídas"
+                        : dashboard.summary.goal <= 0
+                          ? "Defina uma meta mensal"
+                          : `${dashboard.summary.todayOrders} feitos hoje · ${dashboard.summary.dailyGoalRemaining} restantes`}
+                      icon={CalendarDays}
+                      tone={dashboard.summary.dailyGoalAchieved || dashboard.goals.allCompleted ? "green" : "amber"}
+                    />
                     <MetricCard label="Tempo restante" value={formatRemainingTime(dashboard.summary.monthEndsAt, clock)} description={`${dashboard.summary.daysRemaining} dias completos após hoje`} icon={Clock3} tone="cyan" />
                   </section>
 

@@ -3,6 +3,7 @@ import { prisma } from "../db";
 import { parseMonthKey } from "../utils/date";
 
 export type GoalAchievementPayload = {
+  type: "monthly";
   id: string;
   month: string;
   levelId: string;
@@ -97,6 +98,7 @@ export async function evaluateGoalAchievements(
       });
 
       newlyAchieved.push({
+        type: "monthly",
         id: achievement.id,
         month,
         levelId: level.id,

@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { env } from "../config/env";
 import { prisma } from "../db";
 import {
+  currentDateParts,
   currentDay,
   currentMonth,
   dayInTimeZone,
@@ -54,6 +55,12 @@ export async function buildDashboardData(month = currentMonth(env.APP_TIMEZONE),
     dailyAverage: 0,
     projectedOrders: 0,
     requiredDaily: 0,
+    dailyGoal: 0,
+    todayOrders: 0,
+    dailyGoalProgress: 0,
+    dailyGoalRemaining: 0,
+    dailyGoalAchieved: false,
+    dailyGoalDate: null,
     daysRemaining: isCurrent ? Math.max(0, totalDays - currentDay(env.APP_TIMEZONE, now)) : 0,
     remainingDaysIncludingToday: isCurrent ? Math.max(1, totalDays - currentDay(env.APP_TIMEZONE, now) + 1) : 0,
     monthEndsAt: selectedRange.monthEnd.toISOString()
@@ -163,9 +170,22 @@ export async function buildDashboardData(month = currentMonth(env.APP_TIMEZONE),
       : 0;
   const remaining = Math.max(0, goalValue - orders.length);
   const remainingDaysIncludingToday = isCurrent ? Math.max(1, totalDays - today + 1) : 0;
-  const requiredDaily = goalValue > 0 && remaining > 0 && remainingDaysIncludingToday > 0
-    ? Math.ceil(remaining / remainingDaysIncludingToday)
+  const todayOrders = isCurrent ? counts[today - 1] ?? 0 : 0;
+  const ordersBeforeToday = isCurrent ? Math.max(0, orders.length - todayOrders) : orders.length;
+  const remainingAtStartOfDay = Math.max(0, goalValue - ordersBeforeToday);
+  // A meta diária fica congelada pelo retrato do início do dia. Ela não diminui
+  // conforme os pedidos de hoje entram, evitando um alvo móvel.
+  const dailyGoal = isCurrent && !allCompleted && activeLevel && remainingAtStartOfDay > 0 && remainingDaysIncludingToday > 0
+    ? Math.ceil(remainingAtStartOfDay / remainingDaysIncludingToday)
     : 0;
+  const requiredDaily = dailyGoal;
+  const dailyGoalProgress = dailyGoal > 0 ? Math.min(100, (todayOrders / dailyGoal) * 100) : 0;
+  const dailyGoalRemaining = Math.max(0, dailyGoal - todayOrders);
+  const dailyGoalAchieved = dailyGoal > 0 && todayOrders >= dailyGoal;
+  const dateParts = isCurrent ? currentDateParts(env.APP_TIMEZONE, now) : null;
+  const dailyGoalDate = dateParts
+    ? `${dateParts.year}-${String(dateParts.month).padStart(2, "0")}-${String(dateParts.day).padStart(2, "0")}`
+    : null;
 
   return {
     connected: true,
@@ -192,6 +212,12 @@ export async function buildDashboardData(month = currentMonth(env.APP_TIMEZONE),
       dailyAverage: Number(dailyAverage.toFixed(1)),
       projectedOrders,
       requiredDaily,
+      dailyGoal,
+      todayOrders,
+      dailyGoalProgress: Number(dailyGoalProgress.toFixed(1)),
+      dailyGoalRemaining,
+      dailyGoalAchieved,
+      dailyGoalDate,
       daysRemaining: isCurrent ? Math.max(0, totalDays - today) : 0,
       remainingDaysIncludingToday,
       monthEndsAt: selectedRange.monthEnd.toISOString()

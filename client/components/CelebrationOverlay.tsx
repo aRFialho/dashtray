@@ -1,5 +1,5 @@
 import { useEffect, type CSSProperties } from "react";
-import { ArrowRight, PartyPopper, Trophy, X } from "lucide-react";
+import { ArrowRight, CalendarCheck2, PartyPopper, Trophy, X } from "lucide-react";
 import type { GoalAchievementEvent } from "../types";
 
 function playCelebrationSound() {
@@ -36,8 +36,15 @@ export function CelebrationOverlay({ event, onClose }: { event: GoalAchievementE
     return () => window.clearTimeout(timeout);
   }, [event.id, onClose]);
 
+  const daily = event.type === "daily";
+
   return (
-    <div className="celebration" role="alertdialog" aria-live="assertive" aria-label={`Meta ${event.label} atingida`}>
+    <div
+      className={`celebration ${daily ? "celebration--daily" : "celebration--monthly"}`}
+      role="alertdialog"
+      aria-live="assertive"
+      aria-label={daily ? "Meta diária atingida" : `Meta ${event.label} atingida`}
+    >
       <div className="celebration__flash" />
       <div className="confetti-field" aria-hidden="true">
         {Array.from({ length: 72 }, (_, index) => {
@@ -47,7 +54,7 @@ export function CelebrationOverlay({ event, onClose }: { event: GoalAchievementE
             "--duration": `${2.4 + (index % 7) * 0.24}s`,
             "--spin": `${180 + (index % 8) * 90}deg`,
             "--drift": `${-90 + (index % 13) * 15}px`,
-            "--hue": `${(index * 47) % 360}`
+            "--hue": `${daily ? 145 + (index * 11) % 85 : (index * 47) % 360}`
           } as CSSProperties;
           return <span key={index} style={style} />;
         })}
@@ -58,14 +65,24 @@ export function CelebrationOverlay({ event, onClose }: { event: GoalAchievementE
           <X size={20} />
         </button>
         <div className="celebration-card__icon">
-          <Trophy size={42} />
+          {daily ? <CalendarCheck2 size={42} /> : <Trophy size={42} />}
         </div>
-        <span className="celebration-card__eyebrow"><PartyPopper size={16} /> META ATINGIDA!</span>
-        <h2>{event.label}</h2>
+        <span className="celebration-card__eyebrow">
+          <PartyPopper size={16} /> {daily ? "META DIÁRIA ATINGIDA!" : "META ATINGIDA!"}
+        </span>
+        <h2>{daily ? "Ritmo do dia conquistado" : event.label}</h2>
         <strong>{event.targetOrders.toLocaleString("pt-BR")} pedidos</strong>
-        <p>Marco conquistado com {event.orderCount.toLocaleString("pt-BR")} pedidos contabilizados no mês.</p>
+        <p>
+          {daily
+            ? `A equipe chegou a ${event.orderCount.toLocaleString("pt-BR")} pedidos hoje e cumpriu o ritmo necessário para ${event.goalLabel}.`
+            : `Marco conquistado com ${event.orderCount.toLocaleString("pt-BR")} pedidos contabilizados no mês.`}
+        </p>
 
-        {event.nextLevel ? (
+        {daily ? (
+          <div className="celebration-card__complete">
+            Meta diária concluída. Cada novo pedido de hoje vira vantagem para a meta mensal! ⚡
+          </div>
+        ) : event.nextLevel ? (
           <div className="celebration-card__next">
             <span>Próximo nível</span>
             <div>
@@ -81,3 +98,4 @@ export function CelebrationOverlay({ event, onClose }: { event: GoalAchievementE
     </div>
   );
 }
+

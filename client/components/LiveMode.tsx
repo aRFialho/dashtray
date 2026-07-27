@@ -31,6 +31,14 @@ function formatRemainingTime(monthEndsAt: string, now: Date): string {
 function liveEncouragement(data: DashboardData): { tone: "success" | "positive" | "warning" | "boost"; title: string; text: string } {
   const { summary, goals } = data;
 
+  if (summary.dailyGoalAchieved && summary.dailyGoal > 0) {
+    return {
+      tone: "success",
+      title: "Meta diária atingida!",
+      text: `A equipe já fez ${summary.todayOrders.toLocaleString("pt-BR")} pedidos hoje e cumpriu o ritmo necessário para ${summary.goalLabel}.`
+    };
+  }
+
   if (goals.allCompleted) {
     return {
       tone: "success",
@@ -188,8 +196,17 @@ export function LiveMode(props: {
               <strong>{props.data.summary.projectedOrders.toLocaleString("pt-BR")}</strong>
             </div>
             <div>
-              <span>Ritmo necessário</span>
-              <strong>{props.data.summary.requiredDaily.toLocaleString("pt-BR")}/dia</strong>
+              <span>Meta diária</span>
+              <strong>{props.data.summary.dailyGoal > 0
+                ? `${props.data.summary.todayOrders.toLocaleString("pt-BR")}/${props.data.summary.dailyGoal.toLocaleString("pt-BR")}`
+                : "—"}</strong>
+              <small>{props.data.goals.allCompleted
+                ? "MÊS CONCLUÍDO"
+                : props.data.summary.dailyGoalAchieved
+                  ? "ATINGIDA"
+                  : props.data.summary.dailyGoal > 0
+                    ? `faltam ${props.data.summary.dailyGoalRemaining}`
+                    : "SEM ALVO"}</small>
             </div>
             <div>
               <Clock3 size={21} />

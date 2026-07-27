@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DashboardData, LiveIncrementEvent } from "../types";
 
 function greeting(): string {
@@ -73,6 +73,7 @@ export function LiveCoachMascot({
   const messages = useMemo(() => regularMessages(data), [data]);
   const [messageIndex, setMessageIndex] = useState(0);
   const [reaction, setReaction] = useState<string | null>(null);
+  const reactionTimerRef = useRef<number | null>(null);
   const [imageError, setImageError] = useState(false);
   const mascotUrl = `${import.meta.env.BASE_URL}mascot/drossi-live.gif`;
 
@@ -90,10 +91,24 @@ export function LiveCoachMascot({
 
   useEffect(() => {
     if (!increment || increment.amount <= 0) return;
+
+    if (reactionTimerRef.current !== null) {
+      window.clearTimeout(reactionTimerRef.current);
+    }
+
     setReaction(reactionMessage(increment.amount));
-    const timer = window.setTimeout(() => setReaction(null), 5500);
-    return () => window.clearTimeout(timer);
-  }, [increment?.id, increment?.amount]);
+    reactionTimerRef.current = window.setTimeout(() => {
+      setReaction(null);
+      setMessageIndex((current) => (current + 1) % Math.max(1, messages.length));
+      reactionTimerRef.current = null;
+    }, 15_000);
+  }, [increment?.id, increment?.amount, messages.length]);
+
+  useEffect(() => () => {
+    if (reactionTimerRef.current !== null) {
+      window.clearTimeout(reactionTimerRef.current);
+    }
+  }, []);
 
   return (
     <aside className={`live-coach ${reaction ? "live-coach--reacting" : ""}`} aria-live="polite">

@@ -15,6 +15,7 @@ import {
   trayTodayRange
 } from "../utils/date";
 import { buildDashboardData } from "./dashboard";
+import { evaluateDailyGoalAchievement } from "./daily-goal-progress";
 import { evaluateGoalAchievements } from "./goal-progress";
 import { emitDashboardUpdate, emitGoalAchieved, emitLiveCountUpdate, emitNewOrder } from "./realtime";
 import { trayRequest } from "./tray-client";
@@ -57,6 +58,18 @@ export type LiveCountUpdatePayload = {
   delta: number;
   day: number;
   dailyOrders: number;
+  goal: number;
+  goalLabel: string;
+  progress: number;
+  remaining: number;
+  projectedOrders: number;
+  requiredDaily: number;
+  dailyGoal: number;
+  todayOrders: number;
+  dailyGoalProgress: number;
+  dailyGoalRemaining: number;
+  dailyGoalAchieved: boolean;
+  dailyGoalDate: string | null;
   syncedAt: string;
   source: "scheduler" | "browser" | "manual" | "webhook" | "initial";
 };
@@ -78,7 +91,21 @@ const MAX_WEBHOOK_ATTEMPTS = 8;
 function buildLiveCountUpdate(
   dashboard: {
     month: string;
-    summary: { orders: number };
+    summary: {
+      orders: number;
+      goal: number;
+      goalLabel: string;
+      progress: number;
+      remaining: number;
+      projectedOrders: number;
+      requiredDaily: number;
+      dailyGoal: number;
+      todayOrders: number;
+      dailyGoalProgress: number;
+      dailyGoalRemaining: number;
+      dailyGoalAchieved: boolean;
+      dailyGoalDate: string | null;
+    };
     chart: Array<{ day: number; dailyOrders: number | null }>;
   },
   previousOrders: number,
@@ -93,8 +120,45 @@ function buildLiveCountUpdate(
     delta: dashboard.summary.orders - previousOrders,
     day,
     dailyOrders: today?.dailyOrders ?? 0,
+    goal: dashboard.summary.goal,
+    goalLabel: dashboard.summary.goalLabel,
+    progress: dashboard.summary.progress,
+    remaining: dashboard.summary.remaining,
+    projectedOrders: dashboard.summary.projectedOrders,
+    requiredDaily: dashboard.summary.requiredDaily,
+    dailyGoal: dashboard.summary.dailyGoal,
+    todayOrders: dashboard.summary.todayOrders,
+    dailyGoalProgress: dashboard.summary.dailyGoalProgress,
+    dailyGoalRemaining: dashboard.summary.dailyGoalRemaining,
+    dailyGoalAchieved: dashboard.summary.dailyGoalAchieved,
+    dailyGoalDate: dashboard.summary.dailyGoalDate,
     syncedAt: new Date().toISOString(),
     source
+  };
+}
+
+
+async function evaluateAchievementEvents(
+  storeRecordId: string,
+  month: string,
+  dashboardBeforeEvaluation: Awaited<ReturnType<typeof buildDashboardData>>
+) {
+  // A meta diária é avaliada antes da mensal para preservar o alvo do nível que
+  // estava ativo quando o pedido entrou. A conquista mensal pode avançar o nível.
+  const dailyAchievement = await evaluateDailyGoalAchievement(storeRecordId, month, dashboardBeforeEvaluation);
+  const monthlyAchievements = await evaluateGoalAchievements(
+    storeRecordId,
+    month,
+    dashboardBeforeEvaluation.summary.orders
+  );
+  const hasAchievements = Boolean(dailyAchievement) || monthlyAchievements.length > 0;
+  const dashboard = hasAchievements
+    ? await buildDashboardData(month, storeRecordId)
+    : dashboardBeforeEvaluation;
+
+  return {
+    dashboard,
+    events: [...monthlyAchievements, ...(dailyAchievement ? [dailyAchievement] : [])]
   };
 }
 
@@ -218,13 +282,10 @@ export async function syncOrderById(store: TrayStore, orderId: string, rawAction
   await prisma.trayStore.update({ where: { id: store.id }, data: { lastSyncAt: new Date() } });
 
   const beforeAchievements = await buildDashboardData(month, store.id);
-  const achievements = await evaluateGoalAchievements(store.id, month, beforeAchievements.summary.orders);
-  const dashboard = achievements.length > 0
-    ? await buildDashboardData(month, store.id)
-    : beforeAchievements;
+  const { dashboard, events } = await evaluateAchievementEvents(store.id, month, beforeAchievements);
   emitDashboardUpdate(dashboard);
   emitLiveCountUpdate(buildLiveCountUpdate(dashboard, before.summary.orders, "webhook"));
-  achievements.forEach(emitGoalAchieved);
+  events.forEach(emitGoalAchieved);
 
   if (result.isNew) {
     emitNewOrder({
@@ -362,14 +423,11 @@ async function performSyncMonth(
     ]);
 
     const beforeAchievements = await buildDashboardData(month, store.id);
-    const achievements = await evaluateGoalAchievements(store.id, month, beforeAchievements.summary.orders);
-    const dashboard = achievements.length > 0
-      ? await buildDashboardData(month, store.id)
-      : beforeAchievements;
+    const { dashboard, events } = await evaluateAchievementEvents(store.id, month, beforeAchievements);
     const liveUpdate = buildLiveCountUpdate(dashboard, beforeDashboard.summary.orders, source);
     if (broadcast === "full") emitDashboardUpdate(dashboard);
     if (broadcast === "count-only") emitLiveCountUpdate(liveUpdate);
-    achievements.forEach(emitGoalAchieved);
+    events.forEach(emitGoalAchieved);
     return {
       items,
       pages,

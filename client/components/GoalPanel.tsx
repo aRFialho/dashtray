@@ -34,9 +34,17 @@ export function GoalPanel({ data, onEdit }: { data: DashboardData; onEdit: () =>
           <small>até o fim do mês</small>
         </div>
         <div>
-          <span>Ritmo necessário</span>
-          <strong>{data.summary.requiredDaily.toLocaleString("pt-BR")}</strong>
-          <small>pedidos por dia</small>
+          <span>Meta diária automática</span>
+          <strong>{data.summary.dailyGoal > 0
+            ? `${data.summary.todayOrders.toLocaleString("pt-BR")}/${data.summary.dailyGoal.toLocaleString("pt-BR")}`
+            : "—"}</strong>
+          <small>{data.goals.allCompleted
+            ? "escada mensal concluída"
+            : data.summary.dailyGoalAchieved
+              ? "atingida hoje"
+              : data.summary.dailyGoal > 0
+                ? `${data.summary.dailyGoalRemaining} pedidos restantes`
+                : "aguardando meta mensal"}</small>
         </div>
       </div>
 

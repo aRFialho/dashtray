@@ -846,3 +846,11 @@ button:focus-visible, input:focus-visible {
     animation: none;
   }
 }
+
+
+/* Daily automatic goal v1.7.2 */
+.celebration--daily .celebration__flash { background: radial-gradient(circle at center, rgba(69,255,179,.3), transparent 39%); }
+.celebration--daily .celebration-card { border-color: rgba(74,235,168,.36); box-shadow: 0 40px 130px rgba(0,0,0,.62), 0 0 80px rgba(43,226,151,.16); }
+.celebration--daily .celebration-card__icon { color: #75efba; background: radial-gradient(circle at 35% 25%, rgba(139,255,207,.3), rgba(32,212,134,.1)); border-color: rgba(74,235,168,.3); box-shadow: 0 0 48px rgba(43,226,151,.2); }
+.celebration--daily .celebration-card__eyebrow { color: #75efba; }
+.live-targets > div small { display:block; margin-top:3px; color:#7f90ad; font-size:8px; font-weight:900; letter-spacing:.08em; }
