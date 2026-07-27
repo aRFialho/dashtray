@@ -1,6 +1,6 @@
 {
   "name": "volt-tray-dashboard",
-  "version": "1.5.0",
+  "version": "1.6.2",
   "private": true,
   "description": "Dashboard ao vivo de pedidos e metas integrado à API da Tray.",
   "engines": {

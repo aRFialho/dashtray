@@ -14,6 +14,7 @@ import { useAnimatedNumber } from "../hooks/useAnimatedNumber";
 import { useClock } from "../hooks/useClock";
 import type { DashboardData, LiveIncrementEvent, NewOrderEvent } from "../types";
 import { Brand } from "./Brand";
+import { LiveCoachMascot } from "./LiveCoachMascot";
 import { OrdersChart } from "./OrdersChart";
 
 function formatRemainingTime(monthEndsAt: string, now: Date): string {
@@ -221,6 +222,7 @@ export function LiveMode(props: {
         </div>
       </main>
 
+      <LiveCoachMascot data={props.data} increment={props.increment} />
       {props.notice && <div className="live-toast">{props.notice}</div>}
       {props.increment && <div key={`wave-${props.pulseKey}`} className="order-wave" />}
     </section>

@@ -1,50 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-
-type DashboardLike = {
-  summary?: {
-    orders?: number;
-    goal?: number;
-    remaining?: number;
-    percentage?: number;
-    projectedOrders?: number;
-    finalGoalReached?: boolean;
-    completedLevels?: number;
-    totalLevels?: number;
-  };
-};
-
-type IncrementLike =
-  | number
-  | null
-  | undefined
-  | {
-      amount?: number;
-      delta?: number;
-      value?: number;
-      count?: number;
-      id?: string | number;
-      sequence?: string | number;
-      createdAt?: string;
-    };
-
-function readIncrement(increment: IncrementLike): number {
-  if (typeof increment === "number") return Math.max(0, increment);
-  if (!increment || typeof increment !== "object") return 0;
-
-  const value = increment.amount ?? increment.delta ?? increment.value ?? increment.count ?? 0;
-  return Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
-}
-
-function incrementIdentity(increment: IncrementLike): string {
-  if (typeof increment === "number") return String(increment);
-  if (!increment || typeof increment !== "object") return "0";
-  return String(
-    increment.id ??
-      increment.sequence ??
-      increment.createdAt ??
-      `${readIncrement(increment)}-${Date.now()}`
-  );
-}
+import type { DashboardData, LiveIncrementEvent } from "../types";
 
 function greeting(): string {
   const hour = new Date().getHours();
@@ -53,47 +8,44 @@ function greeting(): string {
   return "Boa noite, equipe! Fechando o dia com força! 🌙";
 }
 
-function regularMessages(data: DashboardLike): string[] {
-  const summary = data.summary ?? {};
-  const orders = Number(summary.orders ?? 0);
-  const goal = Number(summary.goal ?? 0);
-  const remaining = Math.max(0, Number(summary.remaining ?? Math.max(0, goal - orders)));
-  const percentage = Number(summary.percentage ?? (goal > 0 ? (orders / goal) * 100 : 0));
-  const projection = Number(summary.projectedOrders ?? orders);
-  const finalGoalReached = Boolean(summary.finalGoalReached);
-
+function regularMessages(data: DashboardData): string[] {
+  const { summary, goals } = data;
   const messages = [greeting()];
 
-  if (finalGoalReached) {
+  if (goals.allCompleted) {
     messages.push("Todas as metas foram conquistadas! Agora é ampliar o recorde! 🏆");
     messages.push("Meta final superada. Cada novo pedido aumenta nossa marca! 🔥");
-  } else if (goal <= 0) {
+  } else if (summary.goal <= 0) {
     messages.push("Cada pedido movimenta o time. Bora crescer esse número! 🚀");
-  } else if (orders >= goal) {
-    messages.push(`Meta de ${goal.toLocaleString("pt-BR")} atingida! Próximo nível ativado! 🎯`);
-  } else if (projection >= goal) {
-    messages.push(`A projeção aponta ${projection.toLocaleString("pt-BR")} pedidos. Estamos no caminho da meta! 🚀`);
+  } else if (summary.remaining === 0) {
+    messages.push(`${summary.goalLabel} atingida! Próximo nível ativado! 🎯`);
+  } else if (summary.projectedOrders >= summary.goal) {
+    messages.push(
+      `A projeção aponta ${summary.projectedOrders.toLocaleString("pt-BR")} pedidos. Estamos no caminho da meta! 🚀`
+    );
     messages.push("O ritmo está forte. Vamos manter até o fechamento! 🔥");
-  } else if (remaining <= 5) {
-    messages.push(`Faltam só ${remaining.toLocaleString("pt-BR")} pedidos. Reta final! 💪`);
+  } else if (summary.remaining <= 5) {
+    messages.push(`Faltam só ${summary.remaining.toLocaleString("pt-BR")} pedidos. Reta final! 💪`);
     messages.push("A meta está logo ali. Vamos buscar os últimos pedidos! 🎯");
-  } else if (percentage >= 80) {
-    messages.push(`Já atingimos ${percentage.toFixed(1).replace(".", ",")}% da meta! ⚡`);
-    messages.push(`Faltam ${remaining.toLocaleString("pt-BR")} pedidos. Está muito perto! 🔥`);
-  } else if (percentage >= 50) {
-    messages.push(`Mais da metade concluída: ${orders.toLocaleString("pt-BR")} pedidos no placar! 🎯`);
+  } else if (summary.progress >= 80) {
+    messages.push(`Já atingimos ${summary.progress.toLocaleString("pt-BR")}% da meta! ⚡`);
+    messages.push(`Faltam ${summary.remaining.toLocaleString("pt-BR")} pedidos. Está muito perto! 🔥`);
+  } else if (summary.progress >= 50) {
+    messages.push(`Mais da metade concluída: ${summary.orders.toLocaleString("pt-BR")} pedidos no placar! 🎯`);
     messages.push("Consistência agora faz a diferença. Bora manter o ritmo! 🚀");
   } else {
-    messages.push(`Já temos ${orders.toLocaleString("pt-BR")} pedidos. Cada entrada conta! 💥`);
+    messages.push(`Já temos ${summary.orders.toLocaleString("pt-BR")} pedidos. Cada entrada conta! 💥`);
     messages.push("Vamos crescer esse placar pedido por pedido! 🚀");
   }
 
-  if (goal > 0 && remaining > 0) {
-    messages.push(`Faltam ${remaining.toLocaleString("pt-BR")} para a meta ativa de ${goal.toLocaleString("pt-BR")}.`);
+  if (summary.goal > 0 && summary.remaining > 0) {
+    messages.push(
+      `Faltam ${summary.remaining.toLocaleString("pt-BR")} para ${summary.goalLabel}, com meta de ${summary.goal.toLocaleString("pt-BR")}.`
+    );
   }
 
-  if (projection > 0) {
-    messages.push(`Projeção atual: ${projection.toLocaleString("pt-BR")} pedidos no fechamento.`);
+  if (summary.projectedOrders > 0) {
+    messages.push(`Projeção atual: ${summary.projectedOrders.toLocaleString("pt-BR")} pedidos no fechamento.`);
   }
 
   return messages;
@@ -111,34 +63,18 @@ function reactionMessage(amount: number): string {
     : `+${amount} no placar! Excelente sequência, equipe! 🚀`;
 }
 
-function mascotCandidates(): string[] {
-  const base = document.querySelector("base")?.getAttribute("href") ?? "/";
-  const normalized = base.endsWith("/") ? base : `${base}/`;
-
-  return [
-    `${normalized}mascot/drossi-live.gif?v=161`,
-    `${normalized}mascot/drossi-live.png?v=161`,
-    `${normalized}mascot/download.gif?v=161`,
-    `${normalized}mascot/download.png?v=161`
-  ];
-}
-
 export function LiveCoachMascot({
   data,
   increment
 }: {
-  data: DashboardLike;
-  increment?: IncrementLike;
+  data: DashboardData;
+  increment: LiveIncrementEvent | null;
 }) {
   const messages = useMemo(() => regularMessages(data), [data]);
-  const imageCandidates = useMemo(() => mascotCandidates(), []);
   const [messageIndex, setMessageIndex] = useState(0);
   const [reaction, setReaction] = useState<string | null>(null);
-  const [imageIndex, setImageIndex] = useState(0);
-  const amount = readIncrement(increment);
-  const identity = incrementIdentity(increment);
-  const imageSource = imageCandidates[imageIndex];
-  const imageMissing = imageIndex >= imageCandidates.length;
+  const [imageError, setImageError] = useState(false);
+  const mascotUrl = `${import.meta.env.BASE_URL}mascot/drossi-live.gif`;
 
   useEffect(() => {
     setMessageIndex(0);
@@ -153,11 +89,11 @@ export function LiveCoachMascot({
   }, [messages.length, reaction]);
 
   useEffect(() => {
-    if (amount <= 0) return;
-    setReaction(reactionMessage(amount));
+    if (!increment || increment.amount <= 0) return;
+    setReaction(reactionMessage(increment.amount));
     const timer = window.setTimeout(() => setReaction(null), 5500);
     return () => window.clearTimeout(timer);
-  }, [identity, amount]);
+  }, [increment?.id, increment?.amount]);
 
   return (
     <aside className={`live-coach ${reaction ? "live-coach--reacting" : ""}`} aria-live="polite">
@@ -166,19 +102,22 @@ export function LiveCoachMascot({
       </div>
 
       <div className="live-coach__character">
-        {reaction && amount > 0 && <strong className="live-coach__increment">+{amount}</strong>}
+        {reaction && increment && increment.amount > 0 && (
+          <strong className="live-coach__increment">+{increment.amount.toLocaleString("pt-BR")}</strong>
+        )}
 
-        {!imageMissing && imageSource ? (
+        {!imageError ? (
           <img
-            src={imageSource}
+            src={mascotUrl}
             alt="Personagem incentivando a equipe"
             draggable={false}
-            onError={() => setImageIndex((current) => current + 1)}
+            onError={() => setImageError(true)}
           />
         ) : (
           <div className="live-coach__image-warning" role="status">
             <strong>Personagem</strong>
-            <span>Imagem não encontrada</span>
+            <span>GIF não encontrado</span>
+            <small>{mascotUrl}</small>
           </div>
         )}
       </div>
